@@ -7,21 +7,23 @@
         <router-view />
       </div>
     </div>
-    <MapFooter />
   </div>
 </template>
 
 <script setup lang="ts">
 import AppHeader from '../components/AppHeader.vue'
 import Sidebar from '../components/Sidebar.vue'
-import MapFooter from '../components/MapFooter.vue'
 </script>
 
 <style scoped>
 .main-layout {
   height: 100vh;
+  width: 100vw;
   display: flex;
   flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
   overflow: hidden;
 }
 
@@ -29,10 +31,14 @@ import MapFooter from '../components/MapFooter.vue'
   flex: 1;
   display: flex;
   position: relative;
+  height: calc(100vh - 70px);
+  overflow: hidden;
 }
 
 .map-container {
   flex: 1;
   position: relative;
+  height: 100%;
+  overflow: hidden;
 }
 </style>

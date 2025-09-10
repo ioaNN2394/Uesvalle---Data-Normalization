@@ -12,6 +12,13 @@ const routes: RouteRecordRaw[] = [
         path: '',
         name: 'map',
         component: MapPage
+      },
+      // Nueva ruta para la página de reportes
+      {
+        path: 'reports',
+        name: 'reports',
+        // Usamos import dinámico para lazy loading
+        component: () => import('../modules/reports/pages/ReportPage.vue')
       }
     ]
   }

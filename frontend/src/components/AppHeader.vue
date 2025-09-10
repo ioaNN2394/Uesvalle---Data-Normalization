@@ -2,8 +2,8 @@
   <header class="app-header">
     <div class="header-left">
       <div class="logo-section">
-        <img src="/vite.svg" alt="UesValle Logo" class="logo" />
-        <h1 class="title">GeoVisor Instituciones Educativas</h1>
+        <img src="/logo-uesvalle.png" alt="UesValle Logo" class="logo" />
+        <h1 class="title">GeoVisor Instituciones Educativas UesValle</h1>
       </div>
     </div>
     
@@ -17,24 +17,24 @@
           @keyup.enter="handleSearch"
         />
         <button @click="handleSearch" class="search-button">
-          <Search :size="20" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.35-4.35"/>
+          </svg>
         </button>
       </div>
     </div>
     
-    <div class="header-right">
-      <!-- Espacio para futuras funcionalidades -->
-    </div>
+    
   </header>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Search } from 'lucide-vue-next'
 
-const searchQuery = ref<string>('')
+const searchQuery = ref('')
 
-const handleSearch = (): void => {
+const handleSearch = () => {
   if (searchQuery.value.trim()) {
     console.log('Searching for:', searchQuery.value)
     // TODO: Implementar lógica de búsqueda
@@ -44,75 +44,83 @@ const handleSearch = (): void => {
 
 <style scoped>
 .app-header {
-  height: 60px;
-  background: #ffffff;
-  border-bottom: 1px solid #e0e0e0;
+  height: 70px;
+  background: #262626;
+ 
   display: flex;
   align-items: center;
   padding: 0 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   z-index: 1000;
+  position: relative;
 }
 
 .header-left {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 300px;
 }
 
 .logo-section {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  
 }
 
 .logo {
-  height: 40px;
+  height: 45px;
   width: auto;
 }
 
 .title {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
-  color: #2c3e50;
+  color: #ffffff;
   margin: 0;
+  white-space: nowrap;
 }
 
 .header-center {
-  flex: 2;
+  flex: 1;
   display: flex;
   justify-content: center;
+  padding: 0 40px;
 }
 
 .search-container {
   position: relative;
   width: 100%;
-  max-width: 400px;
+  max-width: 500px;
 }
 
 .search-input {
   width: 100%;
-  height: 40px;
-  padding: 0 50px 0 16px;
-  border: 2px solid #e0e0e0;
-  border-radius: 20px;
-  font-size: 14px;
+  height: 45px;
+  padding: 0 50px 0 20px;
+  border: 2px solid #ddd;
+  border-radius: 25px;
+  font-size: 15px;
   outline: none;
-  transition: border-color 0.3s ease;
+  transition: all 0.3s ease;
+  background: #f8f9fa;
 }
 
 .search-input:focus {
-  border-color: #3498db;
+  border-color: #007bff;
+  background: white;
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
 }
 
 .search-button {
   position: absolute;
-  right: 8px;
+  right: 5px;
   top: 50%;
   transform: translateY(-50%);
-  background: #3498db;
+  background: #007bff;
   border: none;
   border-radius: 50%;
-  width: 32px;
-  height: 32px;
+  width: 35px;
+  height: 35px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -122,10 +130,40 @@ const handleSearch = (): void => {
 }
 
 .search-button:hover {
-  background: #2980b9;
+  background: #0056b3;
 }
 
 .header-right {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 120px;
+}
+
+.header-icons {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.header-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: background-color 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-icon-btn:hover {
+  background: #f0f0f0;
+}
+
+.header-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
 }
 </style>
