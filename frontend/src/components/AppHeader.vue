@@ -97,12 +97,12 @@ const handleSearch = () => {
   width: 100%;
   height: 45px;
   padding: 0 50px 0 20px;
-  border: 2px solid #ddd;
+  border: 2px solid #000000;
   border-radius: 25px;
   font-size: 15px;
   outline: none;
   transition: all 0.3s ease;
-  background: #f8f9fa;
+  background: #ffffff;
 }
 
 .search-input:focus {
@@ -116,7 +116,7 @@ const handleSearch = () => {
   right: 5px;
   top: 50%;
   transform: translateY(-50%);
-  background: #007bff;
+  background: #373839;
   border: none;
   border-radius: 50%;
   width: 35px;

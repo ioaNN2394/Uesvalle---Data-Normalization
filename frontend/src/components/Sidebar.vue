@@ -16,16 +16,18 @@
       <button class="navbar-icon-btn" title="Notificaciones">
         <img src="/campana.png" alt="Notificaciones" class="navbar-icon" />
       </button>
-      <button class="navbar-icon-btn" title="Reportes">
+      <button class="navbar-icon-btn" title="Reportes" @click="showReportModal = true">
         <img src="/reporte.png" alt="Reportes" class="navbar-icon" />
       </button>
     </div>
+
+    <ReportModal v-if="showReportModal" @close="showReportModal = false" />
   </aside>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-
+import ReportModal from '../modules/reports/components/ReportModal.vue'
 interface Tool {
   id: string
   icon: string
@@ -33,6 +35,7 @@ interface Tool {
 }
 
 const activeTool = ref<string>('')
+const showReportModal = ref(false)
 
 const tools: Tool[] = [
   { id: 'zoom-in', icon: 'ZoomIn', tooltip: 'Acercar' },
@@ -43,7 +46,6 @@ const tools: Tool[] = [
   { id: 'filter', icon: 'Filter', tooltip: 'Filtros' }
 ]
 
-// Componentes de iconos SVG simples (eliminé el Bell)
 const iconComponents = {
   ZoomIn: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`,
   ZoomOut: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`,
@@ -56,7 +58,6 @@ const iconComponents = {
 const handleToolClick = (toolId: string) => {
   activeTool.value = activeTool.value === toolId ? '' : toolId
   console.log('Tool clicked:', toolId)
-  // TODO: Implementar lógica específica para cada herramienta
 }
 </script>
 
