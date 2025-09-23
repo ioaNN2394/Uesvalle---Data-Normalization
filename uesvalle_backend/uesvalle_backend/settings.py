@@ -1,8 +1,19 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Configurar UTF-8 para consola Windows según documentación Python oficial
+# Corrige UnicodeEncodeError con emojis en PowerShell/CMD
+try:
+    if sys.platform.startswith('win') and hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, OSError):
+    # Fallback para versiones Python < 3.7 o errores de configuración
+    pass
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -62,15 +73,22 @@ TEMPLATES = [
 WSGI_APPLICATION = 'uesvalle_backend.wsgi.application'
 
 # Database configuration - Multiple databases for ETL
+# Database routing
+DATABASE_ROUTERS = ['apps.core.db_routers.DatabaseRouter']
+
 DATABASES = {
     "default": {  # Supabase (Postgres) - destino normalizado
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.getenv("SUPABASE_DB_NAME"),
         "USER": os.getenv("SUPABASE_DB_USER"),
-        "PASSWORD": os.getenv("SUPABASE_DB_PASS"),
+        "PASSWORD": os.getenv("SUPABASE_DB_PASSWORD"),
         "HOST": os.getenv("SUPABASE_DB_HOST"),
         "PORT": os.getenv("SUPABASE_DB_PORT", "5432"),
-        "OPTIONS": {"sslmode": os.getenv("SUPABASE_DB_SSLMODE", "require")},
+        "OPTIONS": {
+            "sslmode": os.getenv("SUPABASE_DB_SSLMODE", "require"),
+            # Configurar search_path según documentación PostgreSQL oficial
+            "options": "-c search_path=uesvalle,public"  # uesvalle primero
+        },
     },
     "source_mysql": {  # BD de origen (MySQL)
         "ENGINE": "django.db.backends.mysql",
@@ -161,6 +179,7 @@ LOGGING = {
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs', 'etl.log'),
             'formatter': 'verbose',
+            'encoding': 'utf-8',  # Corrige UnicodeEncodeError según documentación Python
         },
         'console': {
             'level': 'DEBUG' if DEBUG else 'INFO',
@@ -181,3 +200,34 @@ LOGGING = {
         },
     },
 }
+
+# Django REST Framework configuration
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',  # Para desarrollo
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+}
+
+# CORS settings para el frontend
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",  # Vite dev server
+    "http://127.0.0.1:5173",
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+# Supabase configuration for ETL
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")

@@ -21,6 +21,10 @@ urlpatterns = [
     path('control/execute/', views.ETLControlView.as_view(), name='etl-execute'),
     path('control/status/', views.ETLStatusView.as_view(), name='etl-status'),
     
+    # Métricas y calidad
+    path('metrics/', views.ETLMetricsView.as_view(), name='etl-metrics'),
+    path('quality/', views.ETLDataQualityView.as_view(), name='etl-quality'),
+    
     # Health check
     path('health/', views.HealthCheckView.as_view(), name='etl-health'),
 ]

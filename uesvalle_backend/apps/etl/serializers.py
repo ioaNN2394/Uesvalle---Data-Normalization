@@ -6,7 +6,8 @@ from rest_framework import serializers
 from django.utils import timezone
 from .models import (
     ETLRun, DimMunicipio, DimSede, FactInstitucion, 
-    ChangeLog, StgInstitucionMySQL
+    ChangeLog, StgInstitucionMySQL, DataQualityCheck, ETLError, ETLMetrics,
+    Institucion, Sede, FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita
 )
 
 
@@ -49,10 +50,10 @@ class DimMunicipioSerializer(serializers.ModelSerializer):
     class Meta:
         model = DimMunicipio
         fields = [
-            'id', 'codigo', 'nombre', 'departamento_codigo', 
-            'departamento_nombre', 'created_at', 'updated_at'
+            'codigo_municipio', 'nombre', 'codigo_departamento', 
+            'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['codigo_municipio', 'created_at', 'updated_at']
 
 
 class DimSedeSerializer(serializers.ModelSerializer):
@@ -98,6 +99,22 @@ class FactInstitucionListSerializer(serializers.ModelSerializer):
             'id', 'codigo_dane', 'nombre', 'municipio_nombre', 
             'estado', 'sector', 'zona', 'latitud', 'longitud'
         ]
+
+
+class InstitucionSerializer(serializers.ModelSerializer):
+    """Serializer para el modelo Institucion (tabla uesvalle.institucion)."""
+    municipio_nombre = serializers.CharField(source='codigo_municipio.nombre', read_only=True)
+    departamento = serializers.CharField(source='codigo_municipio.codigo_departamento', read_only=True)
+
+    class Meta:
+        model = Institucion
+        fields = [
+            'id', 'nombre', 'dane_ie_id', 'sed_ie_id', 'uesvalle_ie_id',
+            'codigo_municipio', 'municipio_nombre', 'departamento',
+            'direccion', 'telefono', 'email', 'estado', 'metadata',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class FactInstitucionMapSerializer(serializers.ModelSerializer):
@@ -186,18 +203,9 @@ class InstitucionFilterSerializer(serializers.Serializer):
     """Serializer para filtros de búsqueda de instituciones."""
     
     municipio = serializers.CharField(required=False)
-    estado = serializers.ChoiceField(
-        choices=FactInstitucion.ESTADO_CHOICES,
-        required=False
-    )
-    sector = serializers.ChoiceField(
-        choices=FactInstitucion.SECTOR_CHOICES,
-        required=False
-    )
-    zona = serializers.ChoiceField(
-        choices=FactInstitucion.ZONA_CHOICES,
-        required=False
-    )
+    estado = serializers.CharField(required=False)
+    sector = serializers.CharField(required=False)
+    zona = serializers.CharField(required=False)
     search = serializers.CharField(
         required=False,
         help_text="Buscar en nombre de institución"
@@ -206,3 +214,27 @@ class InstitucionFilterSerializer(serializers.Serializer):
         required=False,
         help_text="Filtrar solo instituciones con coordenadas"
     )
+
+
+class ETLTriggerSerializer(serializers.Serializer):
+    """Serializer para triggers del ETL."""
+    
+    excel_a_path = serializers.CharField(required=False, allow_blank=True)
+    excel_b_path = serializers.CharField(required=False, allow_blank=True)
+    mysql_only = serializers.BooleanField(default=False)
+    dry_run = serializers.BooleanField(default=False)
+
+
+class ETLStatusSerializer(serializers.Serializer):
+    """Serializer para el estado del ETL."""
+    
+    last_run = ETLRunSerializer(required=False, allow_null=True)
+    total_runs = serializers.IntegerField()
+    successful_runs = serializers.IntegerField()
+    failed_runs = serializers.IntegerField()
+    running_runs = serializers.IntegerField()
+    total_instituciones = serializers.IntegerField()
+    total_municipios = serializers.IntegerField()
+    instituciones_con_dane = serializers.IntegerField()
+    instituciones_con_sed = serializers.IntegerField()
+    instituciones_con_uesvalle = serializers.IntegerField()

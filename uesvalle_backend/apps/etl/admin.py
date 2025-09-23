@@ -5,7 +5,8 @@ Registra los modelos para administración desde la interfaz web.
 from django.contrib import admin
 from .models import (
     ETLRun, DimMunicipio, DimSede, FactInstitucion, 
-    ChangeLog, StgInstitucionMySQL
+    ChangeLog, StgInstitucionMySQL, Institucion, Sede,
+    FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita
 )
 
 
@@ -40,10 +41,10 @@ class ETLRunAdmin(admin.ModelAdmin):
 
 @admin.register(DimMunicipio)
 class DimMunicipioAdmin(admin.ModelAdmin):
-    list_display = ('codigo', 'nombre', 'departamento_nombre', 'departamento_codigo')
-    list_filter = ('departamento_nombre',)
-    search_fields = ('codigo', 'nombre', 'departamento_nombre')
-    ordering = ('departamento_nombre', 'nombre')
+    list_display = ('codigo_municipio', 'nombre', 'codigo_departamento')
+    list_filter = ('codigo_departamento',)
+    search_fields = ('codigo_municipio', 'nombre')
+    ordering = ('nombre',)
 
 
 @admin.register(DimSede)
@@ -53,7 +54,7 @@ class DimSedeAdmin(admin.ModelAdmin):
     ordering = ('nombre',)
 
 
-@admin.register(FactInstitucion)
+# @admin.register(FactInstitucion)  # Comentado temporalmente - modelo legacy
 class FactInstitucionAdmin(admin.ModelAdmin):
     list_display = (
         'codigo_dane', 'nombre', 'municipio', 'estado', 
@@ -113,6 +114,31 @@ class StgInstitucionMySQLAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         """Solo lectura."""
         return False
+
+
+# Nuevos modelos - Admin básico
+@admin.register(Institucion)
+class InstitucionAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'dane_ie_id', 'sed_ie_id', 'uesvalle_ie_id', 'estado', 'codigo_municipio')
+    list_filter = ('estado', 'codigo_municipio')
+    search_fields = ('nombre', 'dane_ie_id', 'sed_ie_id', 'uesvalle_ie_id')
+    ordering = ('nombre',)
+
+
+@admin.register(Sede)
+class SedeAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'institucion_id', 'codigo_municipio', 'estado')
+    list_filter = ('estado', 'codigo_municipio')
+    search_fields = ('nombre', 'dane_sede_id', 'sed_sede_id', 'uesvalle_sede_id')
+    ordering = ('nombre',)
+
+
+@admin.register(FactMatricula)
+class FactMatriculaAdmin(admin.ModelAdmin):
+    list_display = ('sede_id', 'corte_fecha', 'nivel', 'grado', 'genero', 'total_alumnos')
+    list_filter = ('corte_fecha', 'nivel', 'grado', 'genero')
+    search_fields = ('sede_id__nombre',)
+    ordering = ('-corte_fecha',)
 
 
 # Configuración adicional del admin

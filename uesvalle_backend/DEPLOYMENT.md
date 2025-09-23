@@ -232,6 +232,35 @@ ON etl_factinstitucion (municipio_id, estado);
 
 ## 🔍 Troubleshooting de Producción
 
+### Tablas en esquema personalizado (uesvalle) con Supabase
+
+Si ves errores como:
+
+```
+django.db.utils.ProgrammingError: relation "uesvalle.institucion" does not exist
+```
+
+pero al consultar en SQL Editor las tablas existen bajo el esquema `uesvalle`, la causa suele ser:
+
+- El pooler de Supabase no establece `search_path` a tu esquema, por lo que `institucion` sin esquema no se encuentra.
+- Si defines `db_table = 'uesvalle.institucion'` en Django, este lo cita como un solo identificador y genera `"uesvalle.institucion"`, que Postgres interpreta como un nombre literal (con punto) en el esquema actual, y por eso falla.
+
+Solución recomendada en los modelos Django: usar comillas para separar esquema y tabla en `db_table`:
+
+```python
+class Institucion(models.Model):
+    # ... campos ...
+    class Meta:
+        db_table = 'uesvalle"."institucion'  # genera "uesvalle"."institucion"
+        managed = False  # opcional si la tabla es gestionada fuera de Django
+```
+
+Notas:
+
+- Evita `init_command` (es de MySQL). Con Postgres causará `invalid connection option "init_command"`.
+- No dependas de `search_path` vía `OPTIONS` al usar el pooler; puede ser ignorado.
+- Para consultas råpidas, siempre puedes usar SQL explícito: `SELECT * FROM uesvalle.institucion`.
+
 ### 1. Logs de Error
 
 ```bash
