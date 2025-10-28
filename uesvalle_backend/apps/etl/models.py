@@ -72,7 +72,7 @@ class DimMunicipio(models.Model):
         verbose_name_plural = "Municipios" 
         db_table = 'dim_municipio'  # Sin esquema, usar search_path
         ordering = ['nombre']
-        managed = False  # Tabla existente según documentación Django
+        managed = True  # Django crea/maneja las tablas
     
     def __str__(self):
         return f"{self.nombre} ({self.codigo_municipio})"
@@ -111,7 +111,7 @@ class Institucion(models.Model):
         verbose_name_plural = "Instituciones"
         db_table = 'institucion'  # Sin esquema, usar search_path
         ordering = ['nombre']
-        managed = False  # Tabla existente según documentación Django
+        managed = True  # Django crea/maneja las tablas
     
     def __str__(self):
         return self.nombre
@@ -151,7 +151,7 @@ class Sede(models.Model):
         verbose_name_plural = "Sedes"
         db_table = 'sede'  # Sin esquema, usar search_path
         ordering = ['nombre']
-        managed = False  # Tabla existente según documentación Django
+        managed = True  # Django crea/maneja las tablas
         indexes = [
             models.Index(fields=['institucion_id']),
             models.Index(fields=['codigo_municipio']),

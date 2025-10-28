@@ -13,6 +13,19 @@
     </div>
     
     <div class="navbar-icons">
+      <button 
+        ref="etlButtonRef"
+        class="navbar-icon-btn" 
+        title="Actualización ETL" 
+        @click="showETLModal = true"
+        aria-label="Abrir diálogo de carga de archivos para actualizar ETL"
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+      </button>
       <button class="navbar-icon-btn" title="Notificaciones">
         <img src="/campana.png" alt="Notificaciones" class="navbar-icon" />
       </button>
@@ -21,6 +34,10 @@
       </button>
     </div>
 
+    <ETLUploadModal 
+      :is-open="showETLModal" 
+      @close="handleETLModalClose"
+    />
     <ReportModal v-if="showReportModal" @close="showReportModal = false" />
   </aside>
 </template>
@@ -28,6 +45,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ReportModal from '../modules/reports/components/ReportModal.vue'
+import ETLUploadModal from '../modules/etl/components/ETLUploadModal.vue'
+
 interface Tool {
   id: string
   icon: string
@@ -36,6 +55,8 @@ interface Tool {
 
 const activeTool = ref<string>('')
 const showReportModal = ref(false)
+const showETLModal = ref(false)
+const etlButtonRef = ref<HTMLButtonElement | null>(null)
 
 const tools: Tool[] = [
   { id: 'zoom-in', icon: 'ZoomIn', tooltip: 'Acercar' },
@@ -58,6 +79,11 @@ const iconComponents = {
 const handleToolClick = (toolId: string) => {
   activeTool.value = activeTool.value === toolId ? '' : toolId
   console.log('Tool clicked:', toolId)
+}
+
+const handleETLModalClose = () => {
+  showETLModal.value = false
+  // El foco se devuelve automáticamente desde el modal
 }
 </script>
 

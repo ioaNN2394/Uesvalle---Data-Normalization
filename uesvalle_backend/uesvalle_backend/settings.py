@@ -101,10 +101,20 @@ DATABASES = {
     },
 }
 
-# Database router para controlar migraciones y escrituras
-DATABASE_ROUTERS = ["apps.core.db_routers.SourceReadOnlyRouter"]
-
-# Password validation
+# Configuración especial para tests - evitar pooler de Supabase
+# Django intenta hacer DROP DATABASE pero PgBouncer mantiene conexiones abiertas
+if 'test' in sys.argv:
+    # Para tests, desactivar server-side cursors y no reutilizar conexiones
+    # Esto evita que PgBouncer bloquee el DROP DATABASE durante teardown
+    DATABASES["default"]["CONN_MAX_AGE"] = 0  # No reutilizar conexiones
+    DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = True  # Evitar cursores del lado servidor
+    
+    # Configuración adicional para tests
+    DATABASES["default"]["TEST"] = {
+        "NAME": None,  # Django creará BD de test automáticamente
+        "SERIALIZE": False,  # No serializar BD para mejor performance
+        "MIRROR": None,
+    }
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',

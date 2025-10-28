@@ -5,6 +5,7 @@ Define las rutas de la API REST para el sistema ETL.
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from apps.core import views as core_views
 
 # Crear router para ViewSets
 router = DefaultRouter()
@@ -14,6 +15,13 @@ router.register(r'instituciones', views.FactInstitucionViewSet, basename='instit
 
 # URLs específicas
 urlpatterns = [
+    # Health check desde core
+    path('health/', core_views.health_check, name='health-check'),
+    
+    # Nuevos endpoints simples para tests
+    path('run/', views.etl_run, name='etl-run-simple'),
+    path('status/', views.etl_status, name='etl-status-simple'),
+    
     # Router URLs
     path('', include(router.urls)),
     
@@ -25,8 +33,8 @@ urlpatterns = [
     path('metrics/', views.ETLMetricsView.as_view(), name='etl-metrics'),
     path('quality/', views.ETLDataQualityView.as_view(), name='etl-quality'),
     
-    # Health check
-    path('health/', views.HealthCheckView.as_view(), name='etl-health'),
+    # Health check alternativo aquí también
+    path('health-alt/', views.HealthCheckView.as_view(), name='etl-health-alt'),
 ]
 
 app_name = 'etl'

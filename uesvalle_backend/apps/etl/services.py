@@ -35,6 +35,36 @@ class MySQLExtractor:
             'database': os.getenv('MYSQL_DB_NAME', os.getenv('SOURCE_MYSQL_DB', 'mysql')),
         }
     
+    def _get_mysql_connection(self):
+        """
+        Obtiene una conexión a MySQL.
+        Método para compatibilidad con tests (puede ser mockeado).
+        """
+        cfg = settings.DATABASES.get("source_mysql", {})
+        
+        try:
+            import MySQLdb
+            return MySQLdb.connect(
+                host=cfg.get("HOST", "localhost"),
+                user=cfg.get("USER", "root"),
+                passwd=cfg.get("PASSWORD", ""),
+                db=cfg.get("NAME", "mysql"),
+                port=int(cfg.get("PORT", 3306))
+            )
+        except ImportError:
+            # Fallback a mysql.connector
+            try:
+                import mysql.connector
+                return mysql.connector.connect(
+                    host=cfg.get("HOST", "localhost"),
+                    user=cfg.get("USER", "root"),
+                    password=cfg.get("PASSWORD", ""),
+                    database=cfg.get("NAME", "mysql"),
+                    port=int(cfg.get("PORT", 3306))
+                )
+            except ImportError:
+                return None
+    
     @staticmethod
     def extract_instituciones() -> List[Dict[str, Any]]:
         """
@@ -238,6 +268,100 @@ class ExcelExtractor:
                 'periodo': ['periodo', 'semestre', 'trimestre']
             }
         }
+
+    def extract_from_file(self, path: str, sheet_name: Optional[str] = None) -> pd.DataFrame:
+        """
+        Extrae datos desde un archivo Excel individual.
+        Método para compatibilidad con tests.
+        
+        Args:
+            path: Ruta del archivo Excel
+            sheet_name: Nombre de la hoja (opcional, usa la primera por defecto)
+            
+        Returns:
+            pd.DataFrame con los datos extraídos
+            
+        Raises:
+            FileNotFoundError: Si el archivo no existe
+            ValueError: Si la hoja no existe
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"El archivo no existe: {path}")
+        
+        try:
+            # Usar context manager para cerrar el handle de Excel en Windows
+            with pd.ExcelFile(path) as xls:
+                # Usar la primera hoja si no se especifica
+                sheet = sheet_name or xls.sheet_names[0]
+                if sheet not in xls.sheet_names:
+                    raise ValueError(f"Hoja '{sheet}' no encontrada en {path}")
+                df = pd.read_excel(xls, sheet_name=sheet)
+            
+            return self._validate_excel_structure(df)
+        except Exception as e:
+            self.logger.error(f"Error extrayendo archivo {path}: {e}")
+            raise
+    
+    def _validate_excel_structure(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Valida que el DataFrame tenga la estructura esperada.
+        Método para compatibilidad con tests.
+        
+        Args:
+            df: DataFrame a validar
+            
+        Returns:
+            DataFrame validado
+            
+        Raises:
+            ValueError: Si faltan columnas requeridas
+        """
+        if df.empty:
+            raise ValueError("El archivo Excel está vacío")
+        
+        # Por ahora, solo verificamos que tenga al menos una columna
+        # Puedes añadir validaciones más específicas según necesites
+        if len(df.columns) == 0:
+            raise ValueError("El archivo Excel no tiene columnas")
+        
+        return df
+
+    def _get_mysql_connection(self):
+        """
+        Obtiene una conexión a MySQL usando los parámetros configurados.
+        Método para compatibilidad con tests (puede ser mockeado).
+        
+        Este método es principalmente para que mock.patch funcione correctamente
+        en los tests sin abrir conexiones reales.
+        """
+        # En tests, este método será mockeado, así que la implementación real
+        # no es crítica, pero la incluimos para completitud
+        cfg = settings.DATABASES.get("source_mysql", {})
+        
+        # Usar MySQLdb/mysqlclient si está disponible
+        try:
+            import MySQLdb
+            return MySQLdb.connect(
+                host=cfg.get("HOST", "localhost"),
+                user=cfg.get("USER", "root"),
+                passwd=cfg.get("PASSWORD", ""),
+                db=cfg.get("NAME", "mysql"),
+                port=int(cfg.get("PORT", 3306))
+            )
+        except ImportError:
+            # Fallback a mysql.connector si está disponible
+            try:
+                import mysql.connector
+                return mysql.connector.connect(
+                    host=cfg.get("HOST", "localhost"),
+                    user=cfg.get("USER", "root"),
+                    password=cfg.get("PASSWORD", ""),
+                    database=cfg.get("NAME", "mysql"),
+                    port=int(cfg.get("PORT", 3306))
+                )
+            except ImportError:
+                # Si ninguno está disponible, retornar None (será mockeado en tests)
+                return None
 
     def extract_from_directory(self, directory_path: str, file_patterns: Optional[List[str]] = None) -> Dict[str, List[Dict]]:
         """
@@ -1215,6 +1339,38 @@ class ETLOrchestrator:
         self.excel_extractor = ExcelExtractor(verbose=verbose)
         self.transformer = DataTransformer()
         self.loader = SupabaseLoader(verbose=verbose)
+    
+    def _create_etl_run(self) -> ETLRun:
+        """
+        Crea un nuevo registro de ejecución ETL.
+        Método para compatibilidad con tests.
+        
+        Returns:
+            ETLRun: Instancia del registro creado
+        """
+        return ETLRun.objects.create(status="running")
+    
+    def _finish_etl_run(self, etl_run: ETLRun, ok: bool = True, 
+                       error_message: Optional[str] = None) -> ETLRun:
+        """
+        Finaliza un registro de ejecución ETL.
+        Método para compatibilidad con tests.
+        
+        Args:
+            etl_run: Instancia de ETLRun a finalizar
+            ok: Si True, marca como exitoso; si False, como fallido
+            error_message: Mensaje de error (opcional)
+            
+        Returns:
+            ETLRun: Instancia actualizada
+        """
+        etl_run.status = "success" if ok else "failed"
+        etl_run.finished_at = timezone.now()
+        if error_message:
+            etl_run.meta = etl_run.meta or {}
+            etl_run.meta['error_message'] = str(error_message)
+        etl_run.save(update_fields=["status", "finished_at", "meta"])
+        return etl_run
     
     def execute_full_pipeline(self, excel_a_path: Optional[str] = None, 
                             excel_b_path: Optional[str] = None,

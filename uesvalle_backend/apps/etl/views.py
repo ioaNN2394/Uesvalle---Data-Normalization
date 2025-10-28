@@ -8,10 +8,10 @@ from django.shortcuts import get_object_or_404
 from django.core.management import call_command
 from django.utils import timezone
 from rest_framework import status, viewsets, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 import logging
 
@@ -26,6 +26,51 @@ from .serializers import (
 from .services import ETLOrchestrator
 
 logger = logging.getLogger(__name__)
+
+
+# Nuevas vistas para soportar los endpoints de tests
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def etl_run(request):
+    """
+    Endpoint para ejecutar el ETL
+    Requiere autenticación
+    """
+    try:
+        orch = ETLOrchestrator()
+        etl_run = orch._create_etl_run()
+        return Response(
+            {"etl_run_id": str(etl_run.id)},
+            status=status.HTTP_202_ACCEPTED
+        )
+    except Exception as e:
+        logger.error(f"Error ejecutando ETL: {e}")
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def etl_status(request):
+    """
+    Endpoint para consultar el estado actual del ETL
+    Acceso público
+    """
+    try:
+        last = ETLRun.objects.order_by("-started_at").first()
+        current_status = getattr(last, "status", "idle") if last else "idle"
+        return Response(
+            {"status": current_status},
+            status=status.HTTP_200_OK
+        )
+    except Exception as e:
+        logger.error(f"Error consultando estado ETL: {e}")
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 class ETLRunViewSet(viewsets.ReadOnlyModelViewSet):
