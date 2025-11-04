@@ -126,7 +126,10 @@ class ETLRun(models.Model):
     """Registro de ejecuciones del ETL para auditoría y monitoreo."""
     
     STATUS_CHOICES = [
+        ('pending', 'Pendiente'),
+        ('queued', 'En cola'),
         ('running', 'En ejecución'),
+        ('completed', 'Completado'),
         ('success', 'Exitoso'),
         ('failed', 'Fallido'),
         ('cancelled', 'Cancelado'),
@@ -138,7 +141,7 @@ class ETLRun(models.Model):
     status = models.CharField(
         max_length=30, 
         choices=STATUS_CHOICES,
-        default="running", 
+        default="pending", 
         verbose_name="Estado"
     )
     meta = models.JSONField(
@@ -369,6 +372,16 @@ class ETLFile(models.Model):
         ('success', 'Exitoso'),
         ('failed', 'Fallido'),
     ]
+    
+    # Relación con ETLRun
+    etl_run = models.ForeignKey(
+        ETLRun,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        verbose_name="Job ETL",
+        related_name='files'
+    )
     
     filename = models.CharField(max_length=255, verbose_name="Nombre del archivo")
     file_type = models.CharField(

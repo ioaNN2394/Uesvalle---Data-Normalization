@@ -2,11 +2,12 @@
 URL patterns para el módulo ETL.
 
 Rutas principales:
-- /api/etl/jobs/              - Listar/crear jobs ETL
-- /api/etl/jobs/:id/          - Detalles del job
-- /api/etl/jobs/:id/cancel/   - Cancelar job
-- /api/etl/jobs/:id/logs/     - Logs del job
-- /api/etl/status/            - Estado general
+- /api/etl/upload/           - POST para subir archivos Excel
+- /api/etl/jobs/             - Listar/crear jobs ETL
+- /api/etl/jobs/:id/         - Detalles del job
+- /api/etl/jobs/:id/cancel/  - Cancelar job
+- /api/etl/jobs/:id/logs/    - Logs del job
+- /api/etl/status/           - Estado general
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
@@ -18,6 +19,10 @@ router.register(r'jobs', views_v2.ETLJobViewSet, basename='etl-jobs')
 
 # URLpatterns
 urlpatterns = [
+    # Upload endpoint
+    path('upload/', views_v2.upload_etl_file, name='etl-upload'),
+    
+    # Router endpoints
     path('', include(router.urls)),
     path('status/', views_v2.ETLJobViewSet.as_view({'get': 'status'}), name='etl-status'),
 ]

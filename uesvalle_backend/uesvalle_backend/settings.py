@@ -198,6 +198,11 @@ LOGGING = {
         },
     },
     'loggers': {
+        'etl.api': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
         'apps.etl': {
             'handlers': ['file', 'console'],
             'level': 'INFO',
@@ -225,6 +230,11 @@ REST_FRAMEWORK = {
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.MultiPartParser',
+        'rest_framework.parsers.FormParser',
     ],
 }
 
@@ -275,6 +285,16 @@ ETL_ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv']
 
 # Tamaño de batch para carga
 ETL_BATCH_SIZE = 1000
+
+# Django file upload settings (según documentación oficial)
+# Límite de memoria para request sin archivos (10MB)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# Límite de campos de formulario (1000 campos)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
+
+# Tamaño máximo de field name
+FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50 MB (debe coincidir con ETL_MAX_FILE_SIZE)
 
 # ============================================================================
 # Supabase configuration for ETL

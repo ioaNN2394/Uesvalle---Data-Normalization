@@ -9,6 +9,24 @@ from .models import (
 )
 
 
+class ETLFileSerializer(serializers.ModelSerializer):
+    """Serializer para el modelo ETLFile."""
+    
+    success_rate = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ETLFile
+        fields = [
+            'id', 'filename', 'file_type', 'file_size', 'status',
+            'rows_processed', 'rows_failed', 'error_message',
+            'uploaded_at', 'processed_at', 'success_rate'
+        ]
+        read_only_fields = ['id', 'uploaded_at', 'processed_at']
+    
+    def get_success_rate(self, obj):
+        return obj.success_rate
+
+
 class ETLRunSerializer(serializers.ModelSerializer):
     """Serializer para el modelo ETLRun."""
     

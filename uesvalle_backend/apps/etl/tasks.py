@@ -154,8 +154,8 @@ def etl_cancel_job(self, etl_run_id: int) -> dict:
         
         etl_run = ETLRun.objects.get(id=etl_run_id)
         etl_run.status = 'cancelled'
-        etl_run.completed_at = timezone.now()
-        etl_run.save(update_fields=['status', 'completed_at'])
+        etl_run.finished_at = timezone.now()
+        etl_run.save(update_fields=['status', 'finished_at'])
         
         logger.info(f"✓ Job {etl_run_id} marcado como cancelled")
         

@@ -175,6 +175,7 @@ const props = defineProps({
 
 const emit = defineEmits<{
   close: []
+  'job-created': [jobData: any]
 }>()
 
 const headerId = 'etl-modal-title'
@@ -307,9 +308,61 @@ const handleStartProcessing = async () => {
 
   // Calcular resumen
   completedFilesCount.value = fileQueue.value.filter(f => f.status === 'completed').length
+  
+  // Si hay archivos completados, crear el job ETL
+  if (completedFilesCount.value > 0) {
+    await createETLJob()
+  }
+  
   isProcessing.value = false
   processingComplete.value = true
   announceForScreenReaders(`Procesamiento completado. ${completedFilesCount.value} archivos procesados correctamente.`)
+}
+
+const createETLJob = async () => {
+  try {
+    announceForScreenReaders('Creando job de ETL...')
+    
+    // Recolectar IDs de archivos completados
+    const fileIds = fileQueue.value
+      .filter(f => f.status === 'completed')
+      .map(f => (f as any).serverFileId)
+      .filter(id => id)
+    
+    if (fileIds.length === 0) {
+      announceForScreenReaders('No hay archivos válidos para procesar')
+      return
+    }
+    
+    // Enviar solicitud para crear job
+    const response = await fetch('/api/etl/jobs/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: JSON.stringify({
+        file_ids: fileIds,
+        dry_run: false,
+        cancel_on_error: true
+      })
+    })
+    
+    if (!response.ok) {
+      throw new Error(`Error creando job: ${response.status}`)
+    }
+    
+    const jobData = await response.json()
+    announceForScreenReaders(`Job ETL creado exitosamente. ID: ${jobData.id}`)
+    
+    // Emitir evento con los datos del job
+    emit('job-created', jobData)
+    
+  } catch (error) {
+    const errorMsg = (error as Error).message || 'Error desconocido'
+    announceForScreenReaders(`Error creando job: ${errorMsg}`)
+    console.error('Error creating ETL job:', error)
+  }
 }
 
 const uploadFile = async (queuedFile: QueuedFile) => {
@@ -318,47 +371,33 @@ const uploadFile = async (queuedFile: QueuedFile) => {
     const formData = new FormData()
     formData.append('file', queuedFile.file)
 
-    const xhr = new XMLHttpRequest()
-
-    // Simular progreso (en producción, el servidor enviará eventos de progreso)
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) {
-        queuedFile.progress = (event.loaded / event.total) * 100
-        updateGlobalProgress()
+    // Usar fetch para subir archivo al backend
+    const response = await fetch('/api/etl/upload/', {
+      method: 'POST',
+      body: formData,
+      // No establecer Content-Type para que el navegador lo haga automáticamente con boundary
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
       }
     })
 
-    // Manejar respuesta
-    await new Promise<void>((resolve, reject) => {
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          queuedFile.status = 'completed'
-          queuedFile.progress = 100
-          updateGlobalProgress()
-          announceForScreenReaders(`Archivo ${queuedFile.file.name} subido exitosamente`)
-          resolve()
-        } else {
-          reject(new Error(`Error del servidor: ${xhr.status}`))
-        }
-      })
+    if (!response.ok) {
+      throw new Error(`Error del servidor: ${response.status} ${response.statusText}`)
+    }
 
-      xhr.addEventListener('error', () => {
-        reject(new Error('Error de red'))
-      })
-
-      xhr.addEventListener('abort', () => {
-        reject(new Error('Carga cancelada'))
-      })
-
-      // Para dev/simulación: usar fetch con timeout simulado
-      setTimeout(() => {
-        queuedFile.status = 'completed'
-        queuedFile.progress = 100
-        updateGlobalProgress()
-        announceForScreenReaders(`Archivo ${queuedFile.file.name} procesado`)
-        resolve()
-      }, 2000)
-    })
+    const data = await response.json()
+    
+    // Verificar que el upload fue exitoso
+    if (data.uploaded && data.uploaded.length > 0) {
+      queuedFile.status = 'completed'
+      queuedFile.progress = 100
+      // Guardar el ID del archivo para usarlo luego al crear el job
+      ;(queuedFile as any).serverFileId = data.uploaded[0].id
+      updateGlobalProgress()
+      announceForScreenReaders(`Archivo ${queuedFile.file.name} subido exitosamente`)
+    } else {
+      throw new Error(data.error || 'Error al subir archivo')
+    }
   } catch (error) {
     queuedFile.status = 'error'
     queuedFile.error = (error as Error).message || 'Error desconocido'

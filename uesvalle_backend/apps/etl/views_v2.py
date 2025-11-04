@@ -2,6 +2,7 @@
 Vistas de la API REST para el módulo ETL - v2
 
 Endpoints:
+- POST /api/etl/upload/ - Subir archivos Excel
 - POST /api/etl/jobs/ - Crear job desde archivos
 - GET /api/etl/jobs/:id/ - Estado del job
 - GET /api/etl/jobs/:id/logs/ - Logs del job
@@ -9,20 +10,24 @@ Endpoints:
 - GET /api/etl/status/ - Estado del sistema ETL
 """
 import logging
+import os
+import hashlib
 from datetime import timedelta
 
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db.models import Sum, Avg
+from django.conf import settings
 
 from rest_framework import status, viewsets, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
 from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import ETLRun, ETLFile
-from .serializers import ETLRunSerializer
+from .serializers import ETLRunSerializer, ETLFileSerializer
 from .tasks import etl_run_job, etl_cancel_job
 
 logger = logging.getLogger('etl.api')
@@ -219,3 +224,132 @@ class ETLJobViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
+@api_view(['POST'])
+def upload_etl_file(request):
+    """
+    POST /api/etl/upload/
+    
+    Subir uno o múltiples archivos Excel para procesamiento ETL.
+    
+    Multipart form-data con campo 'file' o 'files[]'.
+    
+    Respuesta (200 OK):
+        [
+            {
+                "id": 1,
+                "filename": "instituciones.xlsx",
+                "file_type": "excel",
+                "file_size": 102400,
+                "status": "pending",
+                "uploaded_at": "2024-01-15T10:00:00Z"
+            }
+        ]
+    
+    Errores:
+    - 400: Archivo inválido, sin archivo, tamaño excedido
+    - 415: Content-Type no soportado (debe ser multipart/form-data)
+    - 500: Error interno del servidor
+    """
+    try:
+        # Validar que hay archivos
+        files = request.FILES.getlist('file')
+        if not files:
+            logger.warning("Intento de upload sin archivos")
+            return Response(
+                {'error': 'No se proporcionaron archivos', 'detail': 'El campo "file" es requerido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        logger.info(f"Recibidos {len(files)} archivo(s) para ETL")
+        
+        uploaded_files = []
+        errors = []
+        
+        for file_obj in files:
+            try:
+                # Validar extensión
+                allowed_ext = ['.xlsx', '.xls', '.csv']
+                filename_lower = file_obj.name.lower()
+                if not any(filename_lower.endswith(ext) for ext in allowed_ext):
+                    error_msg = f"{file_obj.name}: extensión no permitida. Permitidas: {', '.join(allowed_ext)}"
+                    errors.append(error_msg)
+                    logger.warning(error_msg)
+                    continue
+                
+                # Validar tamaño
+                max_size = getattr(settings, 'ETL_MAX_FILE_SIZE', 50 * 1024 * 1024)
+                if file_obj.size > max_size:
+                    error_msg = f"{file_obj.name}: archivo demasiado grande ({file_obj.size / 1024 / 1024:.1f}MB, máx {max_size / 1024 / 1024:.1f}MB)"
+                    errors.append(error_msg)
+                    logger.warning(error_msg)
+                    continue
+                
+                # Determinar tipo
+                if filename_lower.endswith(('.xlsx', '.xls')):
+                    file_type = 'excel'
+                elif filename_lower.endswith('.csv'):
+                    file_type = 'csv'
+                else:
+                    file_type = 'unknown'
+                
+                # Crear directorio si no existe
+                upload_dir = getattr(settings, 'ETL_UPLOAD_DIR', os.path.join(settings.BASE_DIR, 'etl_uploads'))
+                os.makedirs(upload_dir, exist_ok=True)
+                
+                # Generar nombre único (hash + nombre)
+                file_hash = hashlib.md5(f"{file_obj.name}{timezone.now().isoformat()}".encode()).hexdigest()
+                unique_filename = f"{file_hash}_{file_obj.name}"
+                file_path = os.path.join(upload_dir, unique_filename)
+                
+                # Guardar archivo
+                with open(file_path, 'wb+') as destination:
+                    for chunk in file_obj.chunks():
+                        destination.write(chunk)
+                
+                logger.info(f"Archivo guardado: {unique_filename} ({file_obj.size} bytes)")
+                
+                # Crear registro ETLFile
+                etl_file = ETLFile.objects.create(
+                    filename=file_obj.name,
+                    file_type=file_type,
+                    file_path=file_path,
+                    file_size=file_obj.size,
+                    status='pending'
+                )
+                
+                logger.info(f"Registro ETLFile creado: id={etl_file.id}, status=pending")
+                
+                # Serializar respuesta
+                serializer = ETLFileSerializer(etl_file)
+                uploaded_files.append(serializer.data)
+                
+            except Exception as e:
+                error_msg = f"Error procesando {file_obj.name}: {str(e)}"
+                errors.append(error_msg)
+                logger.error(error_msg, exc_info=True)
+        
+        # Responder
+        if not uploaded_files and errors:
+            return Response(
+                {'error': 'Todos los archivos fueron rechazados', 'details': errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        response_data = {
+            'uploaded': uploaded_files,
+            'failed': len(errors),
+        }
+        if errors:
+            response_data['errors'] = errors
+        
+        logger.info(f"Upload completado: {len(uploaded_files)} exitosos, {len(errors)} fallidos")
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en endpoint upload: {e}", exc_info=True)
+        return Response(
+            {'error': 'Error interno del servidor', 'detail': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

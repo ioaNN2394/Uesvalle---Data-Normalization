@@ -1,0 +1,281 @@
+"""
+DIAGRAMA DE ARQUITECTURA ETL - FRONTEND & BACKEND
+===================================================
+
+FLUJO GENERAL:
+==============
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         NAVEGADOR (USUARIO)                         │
+│              http://localhost:5173 (Vue 3 + TypeScript)             │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+           ┌────────▼─────┐  ┌──────▼──────┐  ┌──▼────────────┐
+           │ ETLUploadModal│  │UploadDropzone│  │ FileQueueItem │
+           │    .vue       │  │    .vue      │  │    .vue       │
+           └────────┬─────┘  └──────┬───────┘  └──┬────────────┘
+                    │              │              │
+                    └──────────────┼──────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+                    │ FormData     │ JSON        │
+                    │              │             │
+                    ▼              ▼             ▼
+        ┌─────────────────────────────────────────────────┐
+        │    FETCH API / XMLHttpRequest                   │
+        │  Validación cliente (tamaño, tipo, ext.)        │
+        │  CORS Headers incluidos                         │
+        └─────────────────────────────────────────────────┘
+                    │              │
+                    ▼              ▼
+        ┌──────────────────────────────────────┐
+        │   DJANGO DEVELOPMENT SERVER          │
+        │   http://localhost:8000              │
+        │   uresvalle_backend/urls.py          │
+        └──────────────────────────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+        ▼                       ▼
+    ┌──────────────┐      ┌────────────────┐
+    │ /api/etl/    │      │ /api/etl/      │
+    │ upload/      │      │ jobs/          │
+    └──────┬───────┘      └────────┬───────┘
+           │                       │
+           │ POST multipart        │ POST JSON
+           │ 1 o + archivos        │ file_ids[]
+           │                       │
+           ▼                       ▼
+        ┌────────────────────────────────────────┐
+        │  apps/etl/views_v2.py                  │
+        │  @api_view(['POST'])                   │
+        │  upload_etl_file()                     │
+        └────────────────────────────────────────┘
+           │
+           ├─► Validar: ext, tamaño, MIME
+           │
+           ├─► Guardar: etl_uploads/
+           │   Nombre = hash_SHA256_original_name
+           │
+           ├─► Crear ETLFile model
+           │   status = 'pending'
+           │   file_path, file_size, etc.
+           │
+           └─► Response JSON
+               { uploaded: [{id, filename, ...}],
+                 failed: 0 }
+                 
+                 
+        ┌────────────────────────────────────────┐
+        │  apps/etl/views_v2.py                  │
+        │  ETLJobViewSet.create()                │
+        │  POST /api/etl/jobs/                   │
+        └────────────────────────────────────────┘
+           │
+           ├─► Validar file_ids existen
+           │
+           ├─► Crear ETLRun model
+           │   status = 'pending'
+           │
+           ├─► Asociar ETLFiles al run
+           │
+           ├─► Encolar Celery task
+           │   etl_run_job.delay(
+           │     etl_run_id=...,
+           │     dry_run=False,
+           │     cancel_on_error=True
+           │   )
+           │
+           └─► Response 202 Accepted
+               { id, status, meta: {task_id},
+                 started_at, ... }
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                   CELERY WORKER (Asincrónico)                       │
+│              Redis Broker: redis://localhost:6379/0                 │
+└─────────────────────────────────────────────────────────────────────┘
+           │
+           ├─► etl_run_job(etl_run_id, dry_run, cancel_on_error)
+           │
+           │   ┌──────────────────────────────────────┐
+           │   │ apps/etl/services/orchestrator.py    │
+           │   │ ETLOrchestrator.execute()            │
+           │   └──────────────────────────────────────┘
+           │
+           ├─► FASE 1: EXTRACTION
+           │   └─► Para cada ETLFile:
+           │       ├─ pandas.read_excel()
+           │       ├─ Validar columns
+           │       └─ rows_extracted++
+           │
+           ├─► FASE 2: TRANSFORMATION
+           │   └─► Para cada DataFrame:
+           │       ├─ Trim whitespace
+           │       ├─ Remove null rows
+           │       ├─ Normalize data
+           │       └─ rows_processed++
+           │
+           ├─► FASE 3: LOADING
+           │   └─► Para cada transformed DF:
+           │       ├─ Bulk operations (cuando completo)
+           │       ├─ Upsert to Supabase
+           │       ├─ Actualizar ETLFile.status
+           │       └─ Registrar results
+           │
+           ├─► AUDITORÍA
+           │   └─► Registrar en logs
+           │       ├─ rows_processed
+           │       ├─ rows_failed
+           │       ├─ elapsed_seconds
+           │       └─ errors[]
+           │
+           └─► ETLRun.status = 'completed'
+               ETLRun.meta = {...resultados...}
+
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                  BASES DE DATOS                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+PostgreSQL/Supabase (default database):
+├─ public.etl_run
+│  ├─ id (BigAutoField PK)
+│  ├─ status (CharField: pending, queued, running, completed, failed)
+│  ├─ started_at (DateTimeField)
+│  ├─ finished_at (DateTimeField, nullable)
+│  ├─ meta (JSONField: {phase, elapsed_seconds, errors[], ...})
+│  └─ relation: files (FK ← ETLFile)
+│
+├─ public.etl_file
+│  ├─ id (AutoField PK)
+│  ├─ etl_run_id (ForeignKey → ETLRun, nullable)
+│  ├─ filename (CharField)
+│  ├─ file_type (CharField: excel, csv, json)
+│  ├─ file_path (CharField: /path/to/file)
+│  ├─ file_size (BigIntegerField)
+│  ├─ status (CharField: pending, processing, success, failed)
+│  ├─ rows_processed (IntegerField)
+│  ├─ rows_failed (IntegerField)
+│  ├─ error_message (TextField, nullable)
+│  ├─ uploaded_at (DateTimeField, auto_now_add)
+│  └─ processed_at (DateTimeField, nullable)
+│
+└─ Otras tablas de dimensiones (dim_*) y hechos (fact_*)
+   (Para cargar datos normalizados luego)
+
+
+DIRECTORIO DE ARCHIVOS:
+=======================
+
+uesvalle_backend/
+├─ etl_uploads/                    ← Archivos temporales subidos
+│  └─ sha256hash_original_name.xlsx
+│
+├─ logs/
+│  └─ etl.log                      ← Logs del ETL (nivel INFO)
+│
+├─ apps/etl/
+│  ├─ urls.py                      ← Rutas ETL
+│  ├─ views_v2.py                  ← API endpoints
+│  ├─ models.py                    ← Modelos DB (ETLRun, ETLFile)
+│  ├─ serializers.py               ← Serializers DRF
+│  ├─ tasks.py                     ← Tareas Celery
+│  ├─ services/
+│  │  ├─ orchestrator.py           ← Coordinador E-T-L
+│  │  ├─ extractors.py             ← Extractores (pandas, MySQL)
+│  │  ├─ transformers.py           ← Transformadores
+│  │  ├─ loaders.py                ← Loaders (Supabase)
+│  │  └─ __init__.py               ← Tipos base (Result classes)
+│  └─ migrations/
+│     └─ 0001_initial.py           ← Migración generada
+│
+└─ uesvalle_backend/
+   ├─ settings.py                  ← Config ETL, CORS, Celery
+   ├─ urls.py                      ← URLs globales
+   ├─ celery.py                    ← Config Celery
+   └─ wsgi.py
+
+
+FLUJO COMPLETO - PASO A PASO:
+=============================
+
+1. Usuario en Frontend
+   └─► Click "Subir archivos"
+
+2. Selecciona archivo.xlsx
+   └─► Validación local (size, ext)
+   └─► Se agrega a cola visible
+
+3. Click "Procesar" o "Iniciar"
+   ├─► uploadFile() (para cada archivo)
+   │   └─► POST /api/etl/upload/ con FormData
+   │
+   └─► createETLJob()
+       └─► POST /api/etl/jobs/ con file_ids[]
+
+4. Backend recibe POST /api/etl/upload/
+   ├─► Validar archivo nuevamente
+   ├─► Guardar en etl_uploads/
+   ├─► Crear ETLFile DB
+   └─► Responder con {uploaded: [...], failed: 0}
+
+5. Frontend recibe upload response
+   └─► Extrae IDs y crea job
+
+6. Backend recibe POST /api/etl/jobs/
+   ├─► Validar file_ids
+   ├─► Crear ETLRun
+   ├─► Asociar files al run
+   ├─► Encolar en Celery
+   └─► Responder 202 Accepted
+
+7. Celery worker procesa el job
+   ├─► ETLOrchestrator.execute()
+   │   ├─► Extract: pandas.read_excel()
+   │   ├─► Transform: limpiar datos
+   │   └─► Load: persistir (cuando completo)
+   │
+   └─► Actualizar ETLRun.status = 'completed'
+       Actualizar ETLFile.status = 'success'
+       Logs guardados
+
+8. Frontend puede obtener status
+   └─► GET /api/etl/status/
+       ├─► total_jobs, running_jobs, success_rate
+       └─► Mostrar en dashboard/widget
+
+
+LOGS GENERADOS:
+===============
+
+logs/etl.log contiene:
+├─ [INFO] ▶ Iniciando ETL job {id}...
+├─ [INFO] 📥 FASE 1: Extrayendo datos...
+├─ [INFO] ✓ Excel: N registros extraídos de archivo.xlsx
+├─ [INFO] 🔄 FASE 2: Transformando datos...
+├─ [INFO] ✓ Transformación: X válidos, Y inválidos
+├─ [INFO] 📤 FASE 3: Cargando datos...
+├─ [INFO] ✓ Carga completada: Z registros
+├─ [ERROR] (si hay errores)
+└─ [INFO] ✅ ETL exitoso en 12.34s
+
+
+VERIFICACIÓN FINAL:
+===================
+
+✓ Backend sin errores de compilación
+✓ Frontend conecta sin CORS errors
+✓ Archivos se suben a etl_uploads/
+✓ ETLFile y ETLRun se crean en BD
+✓ Logs se generan en logs/etl.log
+✓ Status endpoint devuelve métricas
+✓ Errores se manejan correctamente
+✓ Componentes se actualizan al completo
+
+"""
+
+print(__doc__)
