@@ -14,10 +14,15 @@ mysqlclient>=2.2.0
 # Variables de entorno
 python-dotenv>=1.0.0
 
+# Task Queue y Message Broker
+celery[redis]==5.3.4  # Celery con soporte Redis
+redis>=4.5.2,<5.0.0   # Cliente Redis (compatible con Celery 5.3.4)
+flower==2.0.1         # Dashboard de monitoreo para Celery (opcional pero recomendado)
+
 # ETL y análisis de datos
 pandas>=2.0.0
-openpyxl>=3.1.0  # Para leer archivos Excel
-xlsxwriter>=3.1.0  # Para escribir archivos Excel
+openpyxl>=3.1.0      # Para leer archivos Excel
+xlsxwriter>=3.1.0    # Para escribir archivos Excel
 
 # SQLAlchemy para operaciones avanzadas de BD
 SQLAlchemy>=2.0.0
@@ -34,10 +39,6 @@ structlog>=23.0.0
 
 # Validación y serialización
 marshmallow>=3.19.0
-
-# Tareas asíncronas (opcional para Celery)
-celery>=5.3.0
-redis>=4.5.0
 
 # Testing
 pytest>=7.4.0

@@ -228,16 +228,55 @@ REST_FRAMEWORK = {
     ],
 }
 
-# CORS settings para el frontend
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",  # Vite dev server
-    "http://127.0.0.1:5173",
+# ============================================================================
+# Celery + Redis/RabbitMQ para ETL asincrónico
+# ============================================================================
+
+# Broker configuration (Redis recomendado)
+# Redis: redis://localhost:6379/0
+# RabbitMQ: amqp://guest:guest@localhost:5672//
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+
+# Backend de resultados (donde Celery almacena resultados de tareas)
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/1')
+
+# Configuración de Celery
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'America/Bogota'  # Zona horaria de Colombia
+
+# Pool de workers
+CELERY_WORKER_POOL = 'solo'  # Para desarrollo; usar 'prefork' en producción
+CELERY_WORKER_CONCURRENCY = 2  # Número de workers paralelos
+
+# Timeouts y reintentos
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutos max por tarea
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutos soft limit
+CELERY_TASK_MAX_RETRIES = 3
+CELERY_TASK_DEFAULT_RETRY_DELAY = 60  # 60 segundos entre reintentos
+
+# Rutas de tareas (autodiscover)
+CELERY_IMPORTS = [
+    'apps.etl.tasks',
 ]
 
-CORS_ALLOW_CREDENTIALS = True
+# ============================================================================
+# ETL Configuration
+# ============================================================================
 
+# Directorio para archivos ETL temporales
+ETL_UPLOAD_DIR = os.path.join(BASE_DIR, 'etl_uploads')
+os.makedirs(ETL_UPLOAD_DIR, exist_ok=True)
+
+# Validación de archivos ETL
+ETL_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+ETL_ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv']
+
+# Tamaño de batch para carga
+ETL_BATCH_SIZE = 1000
+
+# ============================================================================
 # Supabase configuration for ETL
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+# ============================================================================
+

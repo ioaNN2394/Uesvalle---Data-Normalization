@@ -1,31 +1,40 @@
 """
 Vistas de la API REST para el módulo ETL.
-Proporciona endpoints para consultar estado y ejecutar el ETL.
+
+Endpoints:
+- POST /api/etl/jobs/ - Crear job desde archivos
+- GET /api/etl/jobs/:id/ - Estado del job
+- GET /api/etl/jobs/:id/logs/ - Logs del job
+- POST /api/etl/jobs/:id/cancel/ - Cancelar job
+- GET /api/etl/jobs/:id/download-error-report/ - Descargar reporte de errores
 """
 import os
-from django.db.models import Q, Count
+import logging
+from datetime import timedelta
+
+from django.db.models import Q, Count, F
 from django.shortcuts import get_object_or_404
-from django.core.management import call_command
+from django.http import FileResponse
 from django.utils import timezone
+from django.core.paginator import Paginator
+from django.core.files.storage import default_storage
+
 from rest_framework import status, viewsets, filters
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-import logging
 
 from .models import (
-    ETLRun, DimMunicipio, ETLError, DataQualityCheck,
-    Institucion, Sede, FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita
+    ETLRun, ETLFile, ETLError, ETLMetrics, DataQualityCheck, ChangeLog
 )
 from .serializers import (
-    ETLRunSerializer, DimMunicipioSerializer,
-    ETLTriggerSerializer, ETLStatusSerializer, InstitucionSerializer
+    ETLRunSerializer, ETLFileSerializer, ETLErrorSerializer
 )
-from .services import ETLOrchestrator
+from .tasks import etl_run_job, etl_cancel_job
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('etl.api')
 
 
 # Nuevas vistas para soportar los endpoints de tests

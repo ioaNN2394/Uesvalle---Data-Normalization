@@ -1,40 +1,26 @@
 """
 URL patterns para el módulo ETL.
-Define las rutas de la API REST para el sistema ETL.
+
+Rutas principales:
+- /api/etl/jobs/              - Listar/crear jobs ETL
+- /api/etl/jobs/:id/          - Detalles del job
+- /api/etl/jobs/:id/cancel/   - Cancelar job
+- /api/etl/jobs/:id/logs/     - Logs del job
+- /api/etl/status/            - Estado general
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from . import views
-from apps.core import views as core_views
+from . import views_v2
 
-# Crear router para ViewSets
+# Router para ViewSet de Jobs
 router = DefaultRouter()
-router.register(r'runs', views.ETLRunViewSet, basename='etl-runs')
-router.register(r'municipios', views.DimMunicipioViewSet, basename='municipios')
-router.register(r'instituciones', views.FactInstitucionViewSet, basename='instituciones')
+router.register(r'jobs', views_v2.ETLJobViewSet, basename='etl-jobs')
 
-# URLs específicas
+# URLpatterns
 urlpatterns = [
-    # Health check desde core
-    path('health/', core_views.health_check, name='health-check'),
-    
-    # Nuevos endpoints simples para tests
-    path('run/', views.etl_run, name='etl-run-simple'),
-    path('status/', views.etl_status, name='etl-status-simple'),
-    
-    # Router URLs
     path('', include(router.urls)),
-    
-    # Control del ETL
-    path('control/execute/', views.ETLControlView.as_view(), name='etl-execute'),
-    path('control/status/', views.ETLStatusView.as_view(), name='etl-status'),
-    
-    # Métricas y calidad
-    path('metrics/', views.ETLMetricsView.as_view(), name='etl-metrics'),
-    path('quality/', views.ETLDataQualityView.as_view(), name='etl-quality'),
-    
-    # Health check alternativo aquí también
-    path('health-alt/', views.HealthCheckView.as_view(), name='etl-health-alt'),
+    path('status/', views_v2.ETLJobViewSet.as_view({'get': 'status'}), name='etl-status'),
 ]
 
 app_name = 'etl'
+
