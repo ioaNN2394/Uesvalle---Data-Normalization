@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -7,7 +9,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: import.meta.env?.VITE_BACKEND_URL || 'http://localhost:8000',
         changeOrigin: true,
         rewrite: (path) => path
       }

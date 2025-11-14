@@ -156,6 +156,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import UploadDropzone from './UploadDropzone.vue'
 import FileQueueItem from './FileQueueItem.vue'
 import ConfirmationDialog from './ConfirmationDialog.vue'
+import { API_CONFIG, buildApiUrl, API_HEADERS } from '../../../shared/config/api.config'
 
 interface QueuedFile {
   id: string
@@ -335,10 +336,10 @@ const createETLJob = async () => {
     }
     
     // Enviar solicitud para crear job
-    const response = await fetch('/api/etl/jobs/', {
+    const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.JOBS), {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        ...API_HEADERS,
         'X-Requested-With': 'XMLHttpRequest'
       },
       body: JSON.stringify({
@@ -372,7 +373,7 @@ const uploadFile = async (queuedFile: QueuedFile) => {
     formData.append('file', queuedFile.file)
 
     // Usar fetch para subir archivo al backend
-    const response = await fetch('/api/etl/upload/', {
+    const response = await fetch(buildApiUrl(API_CONFIG.ENDPOINTS.UPLOAD), {
       method: 'POST',
       body: formData,
       // No establecer Content-Type para que el navegador lo haga automáticamente con boundary
