@@ -24,6 +24,7 @@ from django.conf import settings
 from ..models import ETLRun, ETLFile, Institucion, Sede, Visita, FactMatricula, FactMatriculaEtnica
 from ..utils.csv_parser import RobustCSVParser
 from ..utils.normalizer import Normalizer
+from ..utils.validators import DepartmentValidator
 from ..utils.data_transformers import transformar_maestras_csv, transformar_visitas_mysql
 
 logger = logging.getLogger('etl.orchestrator')
@@ -271,87 +272,84 @@ class ETLOrchestrator:
             return False
     
     def _execute_loading(self, dry_run: bool = False) -> bool:
+        """Carga datos usando transformadores externos."""
         try:
-            logger.info(f"Cargando datos a Supabase ({'DRY RUN' if dry_run else 'LIVE'})...")
+            logger.info(f"Cargando datos a BD ({'DRY RUN' if dry_run else 'LIVE'})...")
             self._load_dictionaries()
             
-            # Clasificar archivos
+            # Clasificar y ordenar archivos para asegurar orden correcto (Sedes antes que Visitas)
             files_to_process = []
             for transformation in self.transformation_results:
-                df = transformation['df_transformed']
                 filename = transformation['filename']
-                file_type = self._classify_file_content(df, filename)
+                # Simple classification for sorting
+                priority = 99
+                if 'SEDE' in filename.upper() or 'SED' in filename.upper():
+                    priority = 1
+                elif 'VISITA' in filename.upper():
+                    priority = 2
                 
-                priority = {'master_csv': 1, 'visita': 2, 'matricula': 3, 'etnia': 3}.get(file_type, 99)
-                files_to_process.append({**transformation, 'type': file_type, 'priority': priority})
+                files_to_process.append({**transformation, 'priority': priority})
             
             files_to_process.sort(key=lambda x: x['priority'])
             
-            for item in files_to_process:
-                file_id = item['file_id']
-                filename = item['filename']
-                df = item['df_transformed'] # Este es el DF crudo (o semi-limpio)
-                file_type = item['type']
+            for transformation in files_to_process:
+                df = transformation['df_transformed']
+                filename = transformation['filename']
+                file_id = transformation['file_id']
                 
-                logger.info(f"Procesando {filename} como {file_type}...")
-                records_loaded = 0
+                logger.info(f"Procesando {filename}...")
                 
                 try:
-                    if not dry_run:
-                        if file_type == 'master_csv':
-                            # FASE 1: USAR HELPERS EXTERNOS
-                            logger.info("  → Transformando maestras...")
-                            # Llamamos a tu función corregida externa
-                            df_inst, df_sedes, mapa_inst = transformar_maestras_csv(df)
-                            
-                            # Insertamos los DataFrames LIMPIOS
-                            logger.info(f"  → Insertando {len(df_inst)} instituciones...")
-                            inst_count = self._insert_instituciones(df_inst)
-                            
-                            logger.info(f"  → Insertando {len(df_sedes)} sedes...")
-                            sedes_count = self._insert_sedes(df_sedes)
-                            
-                            records_loaded = sedes_count
-                            # Recargamos diccionarios para que las visitas encuentren los IDs nuevos
-                            self._load_dictionaries() 
-
-                        elif file_type == 'visita':
-                            # FASE 2: VISITAS (Usando el DF que ya viene del loop, NO extrayendo de nuevo)
-                            if len(self.dict_sedes) == 0:
-                                logger.warning("⚠️ No hay sedes cargadas. Saltando visitas.")
-                                continue
-
-                            logger.info("  → Transformando visitas...")
-                            # Pasamos el df actual y el diccionario de sedes
-                            df_visitas_clean = transformar_visitas_mysql(df, self.dict_sedes)
-                            
-                            logger.info(f"  → Insertando {len(df_visitas_clean)} visitas...")
-                            records_loaded = self._insert_visitas(df_visitas_clean)
-
-                        elif file_type == 'matricula':
-                            records_loaded = self._process_matricula(df)
-                            
-                        elif file_type == 'etnia':
-                            records_loaded = self._process_etnia(df)
-
-                        # Actualizar estado archivo
+                    # ⭐ USA LAS FUNCIONES EXTERNAS
+                    if 'SEDE' in filename.upper() or 'SED' in filename.upper():
+                        from apps.etl.utils.data_transformers import transformar_maestras_csv
+                        
+                        # Transforma usando función externa
+                        df_inst, df_sedes, mapa = transformar_maestras_csv(df)
+                        
+                        # Inserta
+                        inst_count = self._insert_instituciones(df_inst)
+                        sedes_count = self._insert_sedes(df_sedes)
+                        
+                        logger.info(f"✓ Cargadas {inst_count} instituciones, {sedes_count} sedes")
+                        
+                        # Recarga diccionarios
+                        self._load_dictionaries()
+                        
                         if file_id:
                             ETLFile.objects.filter(id=file_id).update(
-                                status='completed', rows_processed=records_loaded, 
+                                status='completed',
+                                rows_processed=inst_count + sedes_count,
                                 processed_at=timezone.now()
                             )
                     
-                    self.loading_results.append({'file_id': file_id, 'status': 'success', 'records': records_loaded})
-
+                    elif 'VISITA' in filename.upper():
+                        from apps.etl.utils.data_transformers import transformar_visitas_mysql
+                        
+                        df_visitas = transformar_visitas_mysql(df, self.dict_sedes)
+                        visitas_count = self._insert_visitas(df_visitas)
+                        
+                        logger.info(f"✓ Cargadas {visitas_count} visitas")
+                        
+                        if file_id:
+                            ETLFile.objects.filter(id=file_id).update(
+                                status='completed',
+                                rows_processed=visitas_count,
+                                processed_at=timezone.now()
+                            )
+                
                 except Exception as e:
-                    logger.error(f"Error en archivo {filename}: {e}", exc_info=True)
-                    self.errors.append({'file': filename, 'error': str(e)})
+                    logger.error(f"Error cargando {filename}: {str(e)}")
                     if file_id:
-                        ETLFile.objects.filter(id=file_id).update(status='failed', error_message=str(e))
+                        ETLFile.objects.filter(id=file_id).update(
+                            status='failed',
+                            error_message=str(e)
+                        )
             
             return True
+        
         except Exception as e:
-            logger.error(f"❌ Error general en carga: {e}")
+            logger.error(f"Error en carga: {str(e)}")
             return False
 
 
@@ -721,3 +719,266 @@ class ETLOrchestrator:
             Visita.objects.bulk_create(objs, batch_size=500, ignore_conflicts=True)
             count = len(objs)
         return count
+    
+    def process_csv_data(self, df: pd.DataFrame, etl_file) -> tuple:
+        """
+        Procesa y carga datos CSV con validación de departamento.
+        
+        Returns:
+            tuple: (procesados, removidos)
+        """
+        logger.info("=" * 60)
+        logger.info("📋 PROCESANDO CSV")
+        logger.info("=" * 60)
+        
+        try:
+            # ⭐ PRIMERO: Normaliza nombres de columna
+            logger.info("🧹 Normalizando nombres de columnas...")
+            df.columns = [col.strip().upper() for col in df.columns]
+            logger.debug(f"Columnas normalizadas: {df.columns.tolist()}")
+            
+            # ⭐ PASO 1: Validar departamento
+            logger.info("🔍 Paso 1: Validando departamento...")
+            
+            # Detecta la columna de departamento (puede tener varios nombres)
+            department_col = None
+            for possible_name in ['DEPARTAMENTO', 'DEPT', 'DEPARTMENT', 'ID_DEPARTAMENTO']:
+                if possible_name in df.columns:
+                    department_col = possible_name
+                    break
+            
+            if not department_col:
+                logger.error("❌ No se encontró columna de departamento en CSV")
+                raise ValueError("Columna DEPARTAMENTO no encontrada en CSV")
+            
+            initial_rows = len(df)
+            df, removed, kept = DepartmentValidator.filter_dataframe(df, department_col)
+            
+            logger.info(f"✓ Departamento validado:")
+            logger.info(f"  • Filas iniciales: {initial_rows}")
+            logger.info(f"  • Filas del Valle del Cauca: {kept}")
+            logger.info(f"  • Filas eliminadas: {removed}")
+            
+            if kept == 0:
+                logger.warning("⚠️ ADVERTENCIA: No hay registros del Valle del Cauca en el archivo")
+                return 0, initial_rows
+            
+            # ⭐ PASO 2: Normalizar y renombrar columnas
+            logger.info("🔄 Paso 2: Normalizando columnas...")
+            
+            column_mapping = {
+                'COD_DANE': 'codigo_dane_ie',
+                'CODIGO_DANE_IE': 'codigo_dane_ie',
+                'DANE_IE': 'codigo_dane_ie',
+                'NOMBRE_INSTITUCION': 'nombre_institucion',
+                'NOMBRE': 'nombre_institucion',
+                'CORREO_INSTITUCIONAL': 'email',
+                'CORREO': 'email',
+                'EMAIL': 'email',
+                'COD_SEDE_PRINCIPAL': 'codigo_dane_sede',
+                'CODIGO_DANE_SEDE': 'codigo_dane_sede',
+                'DANE_SEDE': 'codigo_dane_sede',
+                'SEDE_PRINCIPAL': 'nombre_sede',
+                'SEDE': 'nombre_sede',
+                'DIRECCION': 'direccion',
+                'DIR': 'direccion',
+                'LATITUD': 'latitud',
+                'LAT': 'latitud',
+                'LONGITUD': 'longitud',
+                'LON': 'longitud',
+                'JORNADA': 'jornada',
+                'ZONA': 'zona',
+                'ESTADO': 'estado',
+                'ID_MUNICIPIO': 'codigo_municipio',
+                'CODIGO_MUNICIPIO': 'codigo_municipio',
+                'MUNICIPIO': 'municipio',
+                'TELEFONO': 'telefono',
+                'TEL': 'telefono',
+                department_col: 'nombre_departamento'
+            }
+            
+            existing_mapping = {old: new for old, new in column_mapping.items() if old in df.columns}
+            df = df.rename(columns=existing_mapping)
+            logger.info(f"✓ {len(existing_mapping)} columnas normalizadas")
+            logger.debug(f"Mapeo realizado: {existing_mapping}")
+            logger.debug(f"Columnas finales: {df.columns.tolist()}")
+            
+            # ⭐ PASO 3: Cargar instituciones
+            logger.info("📥 Paso 3: Cargando instituciones...")
+            instituciones_cargadas = self._process_instituciones(df)
+            
+            # ⭐ PASO 4: Cargar sedes
+            logger.info("📥 Paso 4: Cargando sedes...")
+            sedes_cargadas = self._process_sedes(df)
+            
+            total_cargados = instituciones_cargadas + sedes_cargadas
+            
+            logger.info("=" * 60)
+            logger.info(f"✅ CSV procesado correctamente")
+            logger.info(f"  • Instituciones cargadas: {instituciones_cargadas}")
+            logger.info(f"  • Sedes cargadas: {sedes_cargadas}")
+            logger.info(f"  • Total: {total_cargados}")
+            logger.info("=" * 60)
+            
+            return total_cargados, removed
+        
+        except Exception as e:
+            logger.error(f"❌ Error procesando CSV: {str(e)}")
+            raise
+    
+    def _process_instituciones(self, df: pd.DataFrame) -> int:
+        """Procesa y carga instituciones (solo Valle del Cauca)."""
+        logger.info("Procesando instituciones...")
+        instituciones_cargadas = 0
+        instituciones_fallidas = 0
+        
+        try:
+            # Verificar que la columna existe
+            if 'codigo_dane_ie' not in df.columns:
+                logger.error(f"❌ Columna 'codigo_dane_ie' no encontrada. Disponibles: {df.columns.tolist()}")
+                return 0
+            
+            # Deduplica por DANE
+            unique_inst = df.drop_duplicates(subset=['codigo_dane_ie'])
+            
+            for _, row in unique_inst.iterrows():
+                try:
+                    # Validación 1: confirma que es Valle del Cauca
+                    if not DepartmentValidator.is_valle_cauca(
+                        row.get('nombre_departamento', ''),
+                        row.get('codigo_departamento')
+                    ):
+                        logger.debug(f"  Institución descartada (no es Valle del Cauca): {row.get('nombre_institucion')}")
+                        instituciones_fallidas += 1
+                        continue
+                    
+                    # Validación 2: Verifica código de municipio (primeros 2 dígitos deben ser 76 para Valle del Cauca)
+                    codigo_municipio = str(row.get('codigo_municipio', '')).strip()
+                    if codigo_municipio and len(codigo_municipio) >= 2:
+                        codigo_depto = codigo_municipio[:2]
+                        if codigo_depto != '76':
+                            logger.debug(f"  Institución descartada (municipio {codigo_municipio} no es del Valle del Cauca): {row.get('nombre_institucion')}")
+                            instituciones_fallidas += 1
+                            continue
+                    
+                    # Crea la institución
+                    institucion_obj, created = Institucion.objects.update_or_create(
+                        dane_ie_id=str(row.get('codigo_dane_ie', '')).strip(),
+                        defaults={
+                            'nombre': str(row.get('nombre_institucion', '')).strip(),
+                            'codigo_municipio': codigo_municipio,
+                            'direccion': str(row.get('direccion', '')).strip() if row.get('direccion') else None,
+                            'telefono': str(row.get('telefono', '')).strip() if row.get('telefono') else None,
+                            'email': str(row.get('email', '')).strip() if row.get('email') else None,
+                            'estado': str(row.get('estado', 'A')).strip(),
+                            'metadata': {
+                                'origen': 'master_csv',
+                                'departamento': str(row.get('nombre_departamento', '')).strip(),
+                                'municipio': str(row.get('municipio', '')).strip() if row.get('municipio') else None
+                            }
+                        }
+                    )
+                    
+                    instituciones_cargadas += 1
+                    action = "creada" if created else "actualizada"
+                    logger.debug(f"  ✓ Institución {action}: {row.get('nombre_institucion')}")
+                
+                except Exception as e:
+                    logger.error(f"  ❌ Error cargando institución {row.get('codigo_dane_ie')}: {str(e)}")
+                    instituciones_fallidas += 1
+                    continue
+            
+            logger.info(f"✓ Instituciones: {instituciones_cargadas} cargadas, {instituciones_fallidas} errores")
+            return instituciones_cargadas
+        
+        except Exception as e:
+            logger.error(f"Error procesando instituciones: {str(e)}")
+            return 0
+    
+    def _process_sedes(self, df: pd.DataFrame) -> int:
+        """Procesa y carga sedes (solo del Valle del Cauca)."""
+        logger.info("Procesando sedes...")
+        sedes_cargadas = 0
+        sedes_fallidas = 0
+        
+        try:
+            # Obtén instituciones disponibles
+            instituciones_dict = {ie.nombre.upper(): ie for ie in Institucion.objects.all()}
+            
+            if 'codigo_dane_sede' not in df.columns:
+                logger.error(f"❌ Columna 'codigo_dane_sede' no encontrada. Disponibles: {df.columns.tolist()}")
+                return 0
+            
+            # Deduplica por DANE sede
+            unique_sedes = df.drop_duplicates(subset=['codigo_dane_sede'])
+            
+            for _, row in unique_sedes.iterrows():
+                try:
+                    # Validación 1: confirma que es Valle del Cauca
+                    if not DepartmentValidator.is_valle_cauca(
+                        row.get('nombre_departamento', ''),
+                        row.get('codigo_departamento')
+                    ):
+                        logger.debug(f"  Sede descartada (no es Valle del Cauca): {row.get('nombre_sede')}")
+                        sedes_fallidas += 1
+                        continue
+                    
+                    # Validación 2: Verifica código de municipio
+                    codigo_municipio = str(row.get('codigo_municipio', '')).strip()
+                    if codigo_municipio and len(codigo_municipio) >= 2:
+                        codigo_depto = codigo_municipio[:2]
+                        if codigo_depto != '76':
+                            logger.debug(f"  Sede descartada (municipio {codigo_municipio} no es del Valle del Cauca): {row.get('nombre_sede')}")
+                            sedes_fallidas += 1
+                            continue
+                    
+                    institucion_nombre = str(row.get('nombre_institucion', '')).strip().upper()
+                    institucion = instituciones_dict.get(institucion_nombre)
+                    
+                    if not institucion:
+                        logger.debug(f"  Sede descartada (institución no encontrada): {row.get('nombre_sede')}")
+                        sedes_fallidas += 1
+                        continue
+                    
+                    # Convierte coordenadas
+                    try:
+                        lat = float(str(row.get('latitud', '')).replace(',', '.')) if row.get('latitud') else None
+                        lon = float(str(row.get('longitud', '')).replace(',', '.')) if row.get('longitud') else None
+                    except:
+                        lat, lon = None, None
+                    
+                    sede_obj, created = Sede.objects.update_or_create(
+                        dane_sede_id=str(row.get('codigo_dane_sede', '')).strip(),
+                        defaults={
+                            'institucion_id': institucion.id,
+                            'nombre': str(row.get('nombre_sede', '')).strip(),
+                            'codigo_municipio': codigo_municipio,
+                            'direccion': str(row.get('direccion', '')).strip() if row.get('direccion') else None,
+                            'lat': lat,
+                            'lon': lon,
+                            'estado': str(row.get('estado', 'A')).strip(),
+                            'metadata': {
+                                'origen': 'master_csv',
+                                'jornada': str(row.get('jornada', '')).strip() if row.get('jornada') else '',
+                                'zona': str(row.get('zona', '')).strip() if row.get('zona') else '',
+                                'departamento': str(row.get('nombre_departamento', '')).strip()
+                            }
+                        }
+                    )
+                    
+                    sedes_cargadas += 1
+                    action = "creada" if created else "actualizada"
+                    logger.debug(f"  ✓ Sede {action}: {row.get('nombre_sede')}")
+                
+                except Exception as e:
+                    logger.error(f"  ❌ Error cargando sede {row.get('codigo_dane_sede')}: {str(e)}")
+                    sedes_fallidas += 1
+                    continue
+            
+            logger.info(f"✓ Sedes: {sedes_cargadas} cargadas, {sedes_fallidas} errores")
+            return sedes_cargadas
+        
+        except Exception as e:
+            logger.error(f"Error procesando sedes: {str(e)}")
+            raise
+

@@ -531,7 +531,7 @@ class MapDetailsView(APIView):
             
             # Obtén todas las sedes de esta institución con coordenadas válidas
             sedes = Sede.objects.filter(
-                institucion=institucion,
+                institucion_id=institucion.id,
                 lat__isnull=False,
                 lon__isnull=False
             )

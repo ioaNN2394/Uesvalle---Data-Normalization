@@ -12,14 +12,17 @@ class RobustCSVParser:
     """
     
     @staticmethod
-    def parse_csv(file_path: str, delimiter=';', encoding='utf-8') -> pd.DataFrame:
+    def parse_csv(file_path: str, delimiter=';', encoding='utf-8-sig') -> pd.DataFrame:
         """
         Parsea CSV de forma segura sin confundir delimitadores internos.
+        
+        ⭐ encoding='utf-8-sig' automáticamente elimina el BOM (\ufeff)
         """
         try:
             rows = []
             headers = None
             
+            # ⭐ IMPORTANTE: 'utf-8-sig' elimina el BOM automáticamente
             with open(file_path, 'r', encoding=encoding) as f:
                 # Lee línea por línea
                 for line_num, line in enumerate(f, 1):
@@ -29,8 +32,10 @@ class RobustCSVParser:
                     fields = line.split(delimiter)
                     
                     if line_num == 1:
-                        headers = [h.strip() for h in fields]
-                        logger.info(f"Headers: {len(headers)} columnas")
+                        # ⭐ LIMPIA headers: elimina espacios, BOM y pasa a mayúsculas
+                        headers = [h.strip().upper() for h in fields]
+                        logger.info(f"Headers detectados: {len(headers)} columnas")
+                        logger.debug(f"Headers: {headers}")
                         continue
                     
                     # Limpia espacios en cada campo

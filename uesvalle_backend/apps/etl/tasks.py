@@ -16,6 +16,7 @@ Registro en Celery:
 
 import logging
 from typing import Optional
+import pandas as pd
 
 from celery import shared_task, current_task
 from django.db import transaction
@@ -23,6 +24,8 @@ from django.utils import timezone
 
 from .models import ETLRun, ETLFile
 from .services.orchestrator import ETLOrchestrator
+from .utils.csv_parser import RobustCSVParser
+from .utils.validators import DepartmentValidator
 
 logger = logging.getLogger('etl.tasks')
 
@@ -34,6 +37,7 @@ def etl_run_job(self,
                 cancel_on_error: bool = True) -> dict:
     """
     Ejecuta el pipeline ETL completo (Extract → Transform → Load).
+    Con validación de departamento VALLE DEL CAUCA.
     
     Args:
         etl_run_id: ID del registro ETLRun
@@ -42,16 +46,10 @@ def etl_run_job(self,
     
     Returns:
         Dict con resultado: {'status': 'success'|'failure', 'etl_run_id': int, 'error': str}
-    
-    Ejemplo:
-        >>> from apps.etl.tasks import etl_run_job
-        >>> result = etl_run_job.delay(etl_run_id=1, dry_run=False)
-        >>> result.id  # Task ID para tracking
-        >>> result.get()  # Esperar resultado
     """
+    logger.info(f"▶ Iniciando ETL job asincrónico {etl_run_id}...")
+    
     try:
-        logger.info(f"▶ Iniciando ETL job asincrónico {etl_run_id}...")
-        
         # Actualizar estado en Celery
         self.update_state(
             state='PROGRESS',
@@ -60,30 +58,94 @@ def etl_run_job(self,
         
         # Obtener ETLRun
         etl_run = ETLRun.objects.get(id=etl_run_id)
+        etl_run.status = 'running'
+        etl_run.save(update_fields=['status'])
         
-        # Crear orquestador
         orchestrator = ETLOrchestrator(etl_run_id=etl_run_id)
         
-        # Ejecutar pipeline
-        success = orchestrator.execute(
-            dry_run=dry_run,
-            cancel_on_error=cancel_on_error
-        )
+        # Procesar archivos con validación de departamento
+        files = ETLFile.objects.filter(etl_run_id=etl_run_id, status='pending')
+        total_procesados = 0
+        total_removidos = 0
         
-        if success:
-            logger.info(f"✅ ETL job {etl_run_id} completado exitosamente")
-            return {
-                'status': 'success',
-                'etl_run_id': etl_run_id,
-                'error': None
-            }
-        else:
-            logger.error(f"❌ ETL job {etl_run_id} falló")
-            return {
-                'status': 'failure',
-                'etl_run_id': etl_run_id,
-                'error': 'Fallo en orquestación'
-            }
+        for etl_file in files:
+            logger.info(f"📋 Procesando: {etl_file.filename}")
+            etl_file.status = 'processing'
+            etl_file.save(update_fields=['status'])
+            
+            try:
+                if etl_file.file_type == 'csv':
+                    # Lee el CSV
+                    df = RobustCSVParser.parse_csv(etl_file.file_path)
+                    
+                    # ⭐ Procesa con validación de departamento
+                    procesados, removidos = orchestrator.process_csv_data(df, etl_file)
+                    
+                    total_procesados += procesados
+                    total_removidos += removidos
+                    
+                    etl_file.status = 'completed'
+                    etl_file.rows_processed = procesados
+                    etl_file.rows_failed = removidos
+                    
+                elif etl_file.file_type in ['excel', 'xlsx', 'xls']:
+                    # Lee el Excel
+                    df = pd.read_excel(etl_file.file_path, sheet_name=0)
+                    
+                    # ⭐ Procesa con validación de departamento
+                    procesados, removidos = orchestrator.process_csv_data(df, etl_file)
+                    
+                    total_procesados += procesados
+                    total_removidos += removidos
+                    
+                    etl_file.status = 'completed'
+                    etl_file.rows_processed = procesados
+                    etl_file.rows_failed = removidos
+                
+                etl_file.save(update_fields=['status', 'rows_processed', 'rows_failed'])
+            
+            except Exception as e:
+                logger.error(f"❌ Error procesando archivo: {str(e)}")
+                etl_file.status = 'failed'
+                etl_file.error_message = str(e)
+                etl_file.save(update_fields=['status', 'error_message'])
+                
+                if cancel_on_error:
+                    etl_run.status = 'failed'
+                    etl_run.meta = {
+                        'error': str(e),
+                        'total_procesados': total_procesados,
+                        'total_removidos': total_removidos
+                    }
+                    etl_run.save(update_fields=['status', 'meta'])
+                    
+                    return {
+                        'status': 'failure',
+                        'etl_run_id': etl_run_id,
+                        'error': str(e)
+                    }
+        
+        # Finalizar
+        etl_run.status = 'completed'
+        etl_run.finished_at = timezone.now()
+        etl_run.meta = {
+            'total_procesados': total_procesados,
+            'total_removidos': total_removidos,
+            'mensaje': f'Completado: {total_procesados} registros del Valle del Cauca procesados, {total_removidos} descartados'
+        }
+        etl_run.save(update_fields=['status', 'finished_at', 'meta'])
+        
+        logger.info(f"✅ ETL job {etl_run_id} completado")
+        logger.info(f"   Procesados (Valle del Cauca): {total_procesados}")
+        logger.info(f"   Descartados (otros depts): {total_removidos}")
+        
+        return {
+            'status': 'success',
+            'etl_run_id': etl_run_id,
+            'total_procesados': total_procesados,
+            'total_removidos': total_removidos,
+            'error': None
+        }
             
     except ETLRun.DoesNotExist:
         error_msg = f"ETLRun {etl_run_id} no encontrado"
@@ -96,6 +158,13 @@ def etl_run_job(self,
     
     except Exception as e:
         logger.error(f"❌ Error en ETL job {etl_run_id}: {str(e)}", exc_info=True)
+        
+        try:
+            etl_run = ETLRun.objects.get(id=etl_run_id)
+            etl_run.status = 'failed'
+            etl_run.save(update_fields=['status'])
+        except:
+            pass
         
         # Reintentar con backoff exponencial
         try:
