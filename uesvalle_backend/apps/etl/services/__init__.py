@@ -258,6 +258,12 @@ def setup_etl_logging():
 # Loaders
 from .loaders import PostgreSQLLoader, SupabaseLoader, LoaderFactory  # noqa: F401, E402
 
+# Extractors
+from .extractors import MySQLExtractor, ExcelExtractor  # noqa: F401, E402
+
+# Transformers
+from .transformers import BasicTransformer  # noqa: F401, E402
+
 # Orchestrator
 from .orchestrator import ETLOrchestrator  # noqa: F401, E402
 
@@ -279,6 +285,11 @@ __all__ = [
     'PostgreSQLLoader',
     'SupabaseLoader',
     'LoaderFactory',
+    # Extractors
+    'MySQLExtractor',
+    'ExcelExtractor',
+    # Transformers
+    'BasicTransformer',
     # Orchestrator
     'ETLOrchestrator',
 ]

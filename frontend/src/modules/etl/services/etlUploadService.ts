@@ -25,10 +25,13 @@ export interface UploadOptions {
 // Configuración por defecto
 const DEFAULT_OPTIONS: Required<UploadOptions> = {
   maxFileSize: 50 * 1024 * 1024, // 50MB
-  allowedExtensions: ['.xlsx', '.xls'],
+  allowedExtensions: ['.xlsx', '.xls', '.csv'],
   allowedMimeTypes: [
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-excel'
+    'application/vnd.ms-excel',
+    'text/csv',
+    'application/csv',
+    'application/x-csv'
   ],
   maxParallelUploads: 3,
   endpoint: '/api/etl/upload'
@@ -56,7 +59,7 @@ export const validateETLFile = (
     }
   }
 
-  // Validar MIME type (si no está vacío)
+  // Validar MIME type (algunos navegadores reportan tipos variados para .csv)
   if (file.type && !config.allowedMimeTypes.includes(file.type)) {
     return {
       valid: false,

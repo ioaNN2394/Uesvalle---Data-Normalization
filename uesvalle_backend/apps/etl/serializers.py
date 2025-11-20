@@ -178,3 +178,19 @@ class ETLFileSerializer(serializers.ModelSerializer):
             'error_message', 'uploaded_at', 'processed_at', 'success_rate'
         ]
         read_only_fields = ['id', 'uploaded_at', 'processed_at']
+
+
+class MapMarkerSerializer(serializers.Serializer):
+    """Serializa marcadores para el mapa (sedes con coordenadas)."""
+    sede_id = serializers.UUIDField()
+    sede = serializers.CharField()
+    institucion = serializers.CharField()
+    institucion_id = serializers.UUIDField()
+    dane_ie_id = serializers.CharField()
+    email = serializers.EmailField(allow_null=True)
+    telefono = serializers.CharField(allow_null=True)
+    direccion = serializers.CharField(allow_null=True)
+    estado = serializers.CharField()
+    lat = serializers.DecimalField(max_digits=10, decimal_places=8)
+    lon = serializers.DecimalField(max_digits=10, decimal_places=8)
+    codigo_municipio = serializers.CharField()

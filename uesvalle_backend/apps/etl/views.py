@@ -20,17 +20,23 @@ from django.core.paginator import Paginator
 from django.core.files.storage import default_storage
 
 from rest_framework import status, viewsets, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import (
-    ETLRun, ETLFile, ETLError, ETLMetrics, DataQualityCheck, ChangeLog
+    ETLRun, ETLFile, Institucion, Sede, DimMunicipio,
+    DimEtnia, DimGrado, DimJornada, DimNivel, DimModalidadPAE,
+    FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita
 )
 from .serializers import (
-    ETLRunSerializer, ETLFileSerializer, ETLErrorSerializer
+    ETLRunSerializer, ETLFileSerializer, InstitucionSerializer,
+    SedeSerializer, DimMunicipioSerializer, DimEtniaSerializer,
+    DimGradoSerializer, DimJornadaSerializer, DimNivelSerializer,
+    DimModalidadPAESerializer, FactMatriculaSerializer,
+    FactMatriculaEtnicaSerializer, PaeAsignacionSerializer, VisitaSerializer
 )
 from .tasks import etl_run_job, etl_cancel_job
 
@@ -448,4 +454,127 @@ class ETLDataQualityView(APIView):
             return Response({
                 'error': 'Error obteniendo datos de calidad',
                 'detail': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class MapMarkersView(APIView):
+    """
+    Retorna todos los marcadores (sedes) para el mapa.
+    GET /api/map/markers/
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        try:
+            from django.db import connection
+            
+            # Obtén datos directamente de la BD con JOIN
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        s.id as sede_id,
+                        s.nombre as sede,
+                        i.nombre as institucion,
+                        i.id as institucion_id,
+                        i.dane_ie_id,
+                        i.email,
+                        i.telefono,
+                        i.direccion,
+                        i.estado,
+                        s.lat,
+                        s.lon,
+                        s.codigo_municipio
+                    FROM uesvalle.sede s
+                    INNER JOIN uesvalle.institucion i ON s.institucion_id = i.id
+                    WHERE s.lat IS NOT NULL AND s.lon IS NOT NULL
+                    ORDER BY i.nombre, s.nombre
+                """)
+                
+                columns = [col[0] for col in cursor.description]
+                markers = []
+                
+                for row in cursor.fetchall():
+                    marker = dict(zip(columns, row))
+                    # Convierte Decimal a float para JSON
+                    marker['lat'] = float(marker['lat']) if marker['lat'] else None
+                    marker['lon'] = float(marker['lon']) if marker['lon'] else None
+                    markers.append(marker)
+            
+            logger.info(f"Retornando {len(markers)} marcadores para el mapa")
+            
+            return Response({
+                'status': 'success',
+                'count': len(markers),
+                'data': markers
+            }, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            logger.error(f"Error obteniendo marcadores: {str(e)}")
+            return Response({
+                'status': 'error',
+                'message': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class MapDetailsView(APIView):
+    """
+    Retorna detalles de una institución específica.
+    GET /api/map/institucion/<institucion_id>/
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request, institucion_id):
+        try:
+            from .models import Institucion, Sede
+            
+            institucion = Institucion.objects.get(id=institucion_id)
+            
+            # Obtén todas las sedes de esta institución con coordenadas válidas
+            sedes = Sede.objects.filter(
+                institucion=institucion,
+                lat__isnull=False,
+                lon__isnull=False
+            )
+            
+            # Convierte a lista de diccionarios
+            sedes_list = []
+            for sede in sedes:
+                sede_dict = {
+                    'id': str(sede.id),
+                    'nombre': sede.nombre,
+                    'direccion': sede.direccion,
+                    'lat': float(sede.lat) if sede.lat else None,
+                    'lon': float(sede.lon) if sede.lon else None,
+                    'metadata': sede.metadata
+                }
+                sedes_list.append(sede_dict)
+            
+            return Response({
+                'status': 'success',
+                'institucion': {
+                    'id': str(institucion.id),
+                    'nombre': institucion.nombre,
+                    'dane_ie_id': institucion.dane_ie_id,
+                    'sed_ie_id': institucion.sed_ie_id if hasattr(institucion, 'sed_ie_id') else None,
+                    'uesvalle_ie_id': institucion.uesvalle_ie_id if hasattr(institucion, 'uesvalle_ie_id') else None,
+                    'codigo_municipio': institucion.codigo_municipio,
+                    'direccion': institucion.direccion,
+                    'telefono': institucion.telefono,
+                    'email': institucion.email,
+                    'estado': institucion.estado,
+                    'sedes': sedes_list
+                }
+            }, status=status.HTTP_200_OK)
+        
+        except Institucion.DoesNotExist:
+            logger.error(f"Institución no encontrada: {institucion_id}")
+            return Response({
+                'status': 'error',
+                'message': 'Institución no encontrada'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error obteniendo detalles: {str(e)}", exc_info=True)
+            return Response({
+                'status': 'error',
+                'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -18,7 +18,7 @@
           <div class="modal-header-content">
             <h2 :id="headerId" class="modal-title">Subir archivos para actualizar ETL</h2>
             <p :id="descriptionId" class="modal-subtitle">
-              Solo archivos .xlsx o .xls. Puedes arrastrar y soltar o seleccionarlos desde tu equipo.
+              Archivos soportados: .xlsx, .xls, .csv. Puedes arrastrar y soltar o seleccionarlos desde tu equipo.
             </p>
           </div>
           <button
@@ -194,10 +194,13 @@ const focusedElement = ref<HTMLElement | null>(null)
 // Límites
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 const MAX_PARALLEL_UPLOADS = 3
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls']
+const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv']
 const ALLOWED_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel'
+  'application/vnd.ms-excel',
+  'text/csv',
+  'application/csv',
+  'application/x-csv'
 ]
 
 const confirmationMessage = ref('Si cancelas la operación los archivos que subiste se borrarán y deberás cargarlos nuevamente')
@@ -254,11 +257,11 @@ const validateFile = (file: File): string | null => {
   const hasValidExtension = ALLOWED_EXTENSIONS.some(ext => fileName.endsWith(ext))
 
   if (!hasValidExtension) {
-    return `Formato no permitido: solo .xlsx o .xls. Recibido: ${file.type || 'desconocido'}`
+    return `Formato no permitido: solo .xlsx, .xls o .csv. Recibido: ${file.type || 'desconocido'}`
   }
 
-  // Validar MIME type
-  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+  // Validar MIME type (algunos navegadores reportan text/csv como tipo MIME para .csv)
+  if (file.type && !ALLOWED_MIME_TYPES.includes(file.type)) {
     return `Tipo MIME no permitido. Acepta: ${ALLOWED_MIME_TYPES.join(', ')}`
   }
 

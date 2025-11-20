@@ -13,6 +13,7 @@ staticfiles/
 *.log
 
 # Env files
+.env.local
 .env
 
 # VSCode

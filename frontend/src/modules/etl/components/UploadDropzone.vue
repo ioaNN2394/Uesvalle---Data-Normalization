@@ -7,7 +7,7 @@
     @dragenter.prevent="isDragOver = true"
     :class="{ 'is-drag-over': isDragOver, 'is-disabled': disabled }"
     role="region"
-    aria-label="Zona para subir archivos de Excel"
+    aria-label="Zona para subir archivos de Excel y CSV"
   >
     <div class="dropzone-content">
       <div class="dropzone-icon">
@@ -19,9 +19,9 @@
       </div>
 
       <div class="dropzone-text">
-        <p class="dropzone-main-text">Arrastra tus Excel aquí o haz clic para seleccionarlos</p>
+        <p class="dropzone-main-text">Arrastra tus archivos aquí o haz clic para seleccionarlos</p>
         <p class="dropzone-sub-text">
-          Formatos: .xlsx, .xls | Máximo: {{ (maxFileSize / 1024 / 1024).toFixed(0) }}MB por archivo
+          Formatos: .xlsx, .xls, .csv | Máximo: {{ (maxFileSize / 1024 / 1024).toFixed(0) }}MB por archivo
         </p>
       </div>
 
@@ -29,7 +29,7 @@
         class="dropzone-button"
         @click="triggerFileInput"
         :disabled="disabled"
-        aria-label="Seleccionar archivos de Excel"
+        aria-label="Seleccionar archivos Excel o CSV"
       >
         Seleccionar archivos
       </button>
@@ -38,7 +38,7 @@
         ref="fileInput"
         type="file"
         multiple
-        accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+        accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
         @change="handleFileInputChange"
         class="file-input"
         aria-hidden="true"
@@ -80,7 +80,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const isDragOver = ref(false)
 const validationMessage = ref('')
 
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls']
+const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv']
 
 const triggerFileInput = () => {
   if (!props.disabled && fileInput.value) {
@@ -116,7 +116,7 @@ const handleDrop = (event: DragEvent) => {
   const validFiles = Array.from(files).filter((file) => {
     const isValid = validateFile(file)
     if (!isValid) {
-      validationMessage.value = `Archivo no válido: ${file.name}. Solo se permiten .xlsx y .xls`
+      validationMessage.value = `Archivo no válido: ${file.name}. Solo se permiten .xlsx, .xls y .csv`
       return false
     }
     return true

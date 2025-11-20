@@ -2,7 +2,7 @@
 Vistas de la API REST para el módulo ETL - v2
 
 Endpoints:
-- POST /api/etl/upload/ - Subir archivos Excel
+- POST /api/etl/upload/ - Subir archivos Excel/CSV
 - POST /api/etl/jobs/ - Crear job desde archivos
 - GET /api/etl/jobs/:id/ - Estado del job
 - GET /api/etl/jobs/:id/logs/ - Logs del job
@@ -88,12 +88,12 @@ class ETLJobViewSet(viewsets.ModelViewSet):
             # Crear ETLRun
             etl_run = ETLRun.objects.create(
                 status='pending',
-                metadata={'dry_run': dry_run, 'cancel_on_error': cancel_on_error}
+                meta={'dry_run': dry_run, 'cancel_on_error': cancel_on_error}
             )
             
             # Asignar archivos
             for file_obj in files:
-                file_obj.etl_run = etl_run
+                file_obj.etl_run_id = etl_run.id
                 file_obj.save()
             
             # Encolar tarea Celery
@@ -104,7 +104,7 @@ class ETLJobViewSet(viewsets.ModelViewSet):
             )
             
             # Guardar task ID
-            etl_run.metadata['task_id'] = task.id
+            etl_run.meta['task_id'] = task.id
             etl_run.status = 'queued'
             etl_run.save()
             
@@ -140,7 +140,7 @@ class ETLJobViewSet(viewsets.ModelViewSet):
         
         try:
             # Cancelar tarea Celery
-            task_id = etl_run.metadata.get('task_id')
+            task_id = etl_run.meta.get('task_id')
             if task_id:
                 from uesvalle_backend.celery import app as celery_app
                 celery_app.control.revoke(task_id, terminate=True)
@@ -230,9 +230,10 @@ def upload_etl_file(request):
     """
     POST /api/etl/upload/
     
-    Subir uno o múltiples archivos Excel para procesamiento ETL.
+    Subir uno o múltiples archivos Excel/CSV para procesamiento ETL.
     
     Multipart form-data con campo 'file' o 'files[]'.
+    Tipos soportados: .xlsx, .xls, .csv
     
     Respuesta (200 OK):
         [

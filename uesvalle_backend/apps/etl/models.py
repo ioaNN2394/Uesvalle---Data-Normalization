@@ -155,7 +155,7 @@ class ETLRun(models.Model):
         verbose_name_plural = "Ejecuciones ETL"
         ordering = ['-started_at']
         db_table = 'uesvalle"."etl_run'
-        managed = True
+        managed = False
     
     def __str__(self):
         return f"ETL Run {self.id} - {self.status} ({self.started_at})"
@@ -373,14 +373,11 @@ class ETLFile(models.Model):
         ('failed', 'Fallido'),
     ]
     
-    # Relación con ETLRun
-    etl_run = models.ForeignKey(
-        ETLRun,
-        on_delete=models.CASCADE,
+    # Relación con ETLRun - usando campo explícito para coincidir con BD
+    etl_run_id = models.BigIntegerField(
         null=True,
         blank=True,
-        verbose_name="Job ETL",
-        related_name='files'
+        verbose_name="Job ETL ID"
     )
     
     filename = models.CharField(max_length=255, verbose_name="Nombre del archivo")
@@ -428,8 +425,8 @@ class ETLFile(models.Model):
     class Meta:
         verbose_name = "Archivo ETL"
         verbose_name_plural = "Archivos ETL"
-        db_table = 'public"."etl_file'
-        managed = True
+        db_table = 'uesvalle"."etl_file'
+        managed = False  # Django no controla creación/migración de esta tabla
         ordering = ['-uploaded_at']
     
     def __str__(self):

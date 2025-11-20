@@ -1,4 +1,4 @@
-# 📋 Módulo de Carga de Excel para Actualización de ETL
+# 📋 Módulo de Carga de Excel y CSV para Actualización de ETL
 
 ## 📚 Documentación Completa de Implementación
 
@@ -8,7 +8,7 @@ Esta documentación describe el nuevo módulo `ETL Upload` implementado siguiend
 
 ## 🎯 Resumen de la Solución
 
-El módulo permite a los usuarios cargar archivos Excel (.xlsx, .xls) para actualizar el ETL con:
+El módulo permite a los usuarios cargar archivos Excel (.xlsx, .xls) y CSV (.csv) para actualizar el ETL con:
 
 - ✅ **Validación robusta** de archivos
 - ✅ **Interfaz drag-and-drop** intuitiva
@@ -76,9 +76,10 @@ frontend/src/components/Sidebar.vue  # Botón "Actualización ETL"
 
 **Validaciones:**
 ```
-✓ Extensión: .xlsx, .xls
+✓ Extensión: .xlsx, .xls, .csv
 ✓ MIME: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
        application/vnd.ms-excel
+       text/csv
 ✓ Tamaño máximo: 50MB (configurable)
 ✓ Duplicados: Detecta archivos con el mismo nombre
 ```
@@ -114,9 +115,9 @@ frontend/src/components/Sidebar.vue  # Botón "Actualización ETL"
 
 **Microcopy:**
 ```
-Zona vacía: "Arrastra tus Excel aquí o haz clic para seleccionarlos"
-Límite: "Hasta 50 MB por archivo. Solo .xlsx o .xls."
-Error: "Formato no permitido: solo .xlsx o .xls"
+Zona vacía: "Arrastra tus archivos aquí o haz clic para seleccionarlos"
+Límite: "Hasta 50 MB por archivo. Solo .xlsx, .xls y .csv."
+Error: "Formato no permitido: solo .xlsx, .xls y .csv"
 ```
 
 ---
@@ -199,7 +200,7 @@ interface QueuedFile {
 
 interface UploadOptions {
   maxFileSize?: number            // Límite en bytes
-  allowedExtensions?: string[]    // Ej: ['.xlsx', '.xls']
+  allowedExtensions?: string[]    // Ej: ['.xlsx', '.xls', '.csv']
   allowedMimeTypes?: string[]     // Tipos MIME permitidos
   maxParallelUploads?: number     // Máximo en paralelo (default: 3)
   endpoint?: string               // URL del servidor (default: '/api/etl/upload')
@@ -570,10 +571,3 @@ test('rechaza archivos mayores al límite', () => {
 - **WCAG 2.1:** https://www.w3.org/WAI/WCAG21/quickref/
 
 ---
-
-## 📞 Soporte
-
-Para problemas o mejoras, contacta al equipo de desarrollo frontend.
-
-**Última actualización:** Octubre 2025  
-**Versión:** 1.0.0

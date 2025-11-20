@@ -1,47 +1,93 @@
 <template>
-  <div class="map-view">
-    <div ref="mapContainer" class="map-container"></div>
-    <div class="map-coordinates">
-      {{ coordinates }}
+  <div class="map-container">
+    <!-- Mapa Leaflet -->
+    <div id="map" ref="mapContainer" class="map"></div>
+    
+    <!-- Panel de información (cuando se hace click en un marcador) -->
+    <div v-if="selectedInstitution" class="info-panel">
+      <button @click="closeInfo" class="close-btn">✕</button>
+      <div class="institution-info">
+        <h2>{{ selectedInstitution.nombre }}</h2>
+        <p><strong>DANE:</strong> {{ selectedInstitution.dane_ie_id }}</p>
+        <p><strong>Municipio:</strong> {{ selectedInstitution.codigo_municipio }}</p>
+        <p><strong>Dirección:</strong> {{ selectedInstitution.direccion }}</p>
+        <p><strong>Teléfono:</strong> {{ selectedInstitution.telefono || 'N/A' }}</p>
+        <p><strong>Email:</strong> {{ selectedInstitution.email || 'N/A' }}</p>
+        <p><strong>Estado:</strong> {{ selectedInstitution.estado }}</p>
+        
+        <!-- Sedes de la institución -->
+        <div class="sedes-list">
+          <h3>Sedes ({{ selectedInstitution.sedes?.length || 0 }})</h3>
+          <ul>
+            <li v-for="sede in selectedInstitution.sedes" :key="sede.id" class="sede-item">
+              <strong>{{ sede.nombre }}</strong>
+              <p>{{ sede.direccion }}</p>
+              <p class="coords">{{ sede.lat.toFixed(6) }}, {{ sede.lon.toFixed(6) }}</p>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
-    <div class="map-scale"></div>
+    
+    <!-- Visualizador de coordenadas -->
+    <div class="coords-display">
+      Lat: {{ mouseCoords.lat.toFixed(6) }} | Lon: {{ mouseCoords.lon.toFixed(6) }}
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 const mapContainer = ref<HTMLDivElement>()
-const coordinates = ref('-75.919, 3.528 Grados')
 let map: any = null
+let markers: any[] = []
 
-// Datos de ejemplo de instituciones educativas del Valle del Cauca
-const mockInstitutions = [
-  { id: 1, name: 'IE San José de Cali', lat: 3.4516, lng: -76.5320, type: 'Público', municipio: 'Cali' },
-  { id: 2, name: 'Colegio La Salle Cali', lat: 3.4372, lng: -76.5225, type: 'Privado', municipio: 'Cali' },
-  { id: 3, name: 'IE Santa Librada Tuluá', lat: 4.0892, lng: -76.1958, type: 'Público', municipio: 'Tuluá' },
-  { id: 4, name: 'Colegio Bolivariano Palmira', lat: 3.5394, lng: -76.3037, type: 'Público', municipio: 'Palmira' },
-  { id: 5, name: 'IE José María Córdoba Buenaventura', lat: 3.8833, lng: -77.0167, type: 'Público', municipio: 'Buenaventura' },
-  { id: 6, name: 'Colegio San Pedro Claver Buga', lat: 3.9019, lng: -76.2929, type: 'Privado', municipio: 'Buga' },
-  // Agregar más instituciones para simular densidad como en la imagen
-  ...Array.from({ length: 200 }, (_, i) => ({
-    id: i + 7,
-    name: `Institución Educativa ${i + 1}`,
-    lat: 3.2 + Math.random() * 1.2,
-    lng: -77.2 + Math.random() * 1.5,
-    type: Math.random() > 0.5 ? 'Público' : 'Privado',
-    municipio: ['Cali', 'Palmira', 'Tuluá', 'Buga', 'Buenaventura', 'Cartago'][Math.floor(Math.random() * 6)]
-  }))
-]
+const mouseCoords = ref({ lat: 0, lon: 0 })
+const selectedInstitution = ref<any>(null)
+const institutionsData = ref<any[]>([])
 
-const initMap = async () => {
-  if (!mapContainer.value) return
-
+// ===== API CALLS =====
+async function fetchMapMarkers() {
   try {
-    // Importar Leaflet dinámicamente
-    const L = await import('leaflet')
-    await import('leaflet/dist/leaflet.css')
+    const response = await fetch('/api/etl/map/markers/')
+    const data = await response.json()
+    
+    if (data.status === 'success') {
+      institutionsData.value = data.data
+      console.log(`✓ Cargados ${data.count} marcadores`)
+      addMarkersToMap()
+    }
+  } catch (error) {
+    console.error('Error obteniendo marcadores:', error)
+  }
+}
 
+async function fetchInstitutionDetails(institucionId: string) {
+  try {
+    const response = await fetch(`/api/etl/map/institucion/${institucionId}/`)
+    const data = await response.json()
+    
+    if (data.status === 'success') {
+      selectedInstitution.value = data.institucion
+      console.log('✓ Detalles de institución cargados')
+    }
+  } catch (error) {
+    console.error('Error obteniendo detalles:', error)
+  }
+}
+
+// ===== INICIALIZACIÓN DEL MAPA =====
+async function initMap() {
+  if (!mapContainer.value) return
+  
+  try {
+    // Importa Leaflet dinámicamente
+    const L = (await import('leaflet')).default
+    
+    // Importa estilos
+    await import('leaflet/dist/leaflet.css')
+    
     // Fix para los iconos de Leaflet
     delete (L.Icon.Default.prototype as any)._getIconUrl
     L.Icon.Default.mergeOptions({
@@ -49,71 +95,88 @@ const initMap = async () => {
       iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
       shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
     })
-
-    // Crear el mapa centrado en Valle del Cauca
-    map = L.map(mapContainer.value, {
-      center: [3.8, -76.3],
-      zoom: 8,
-      zoomControl: false, // Remover controles por defecto
-      attributionControl: false // Remover atribución por defecto
-    })
-
-    // Agregar capa base similar a la imagen
+    
+    // Crea el mapa
+    map = L.map(mapContainer.value).setView([3.8, -76.3], 9)
+    
+    // Capa base (OpenStreetMap)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: ''
+      attribution: '© OpenStreetMap contributors',
+      maxZoom: 19
     }).addTo(map)
-
-    // Crear icono personalizado para las instituciones (color vino como en la imagen)
-    const customIcon = L.divIcon({
-      className: 'custom-marker',
-      html: '<div class="marker-dot"></div>',
-      iconSize: [8, 8],
-      iconAnchor: [4, 4]
-    })
-
-    // Agregar marcadores de instituciones
-    mockInstitutions.forEach(institution => {
-      const marker = L.marker([institution.lat, institution.lng], { icon: customIcon })
-        .bindPopup(`
-          <div class="popup-content">
-            <h3>${institution.name}</h3>
-            <p><strong>Tipo:</strong> ${institution.type}</p>
-            <p><strong>Municipio:</strong> ${institution.municipio}</p>
-            <p><strong>Coordenadas:</strong> ${institution.lat.toFixed(4)}, ${institution.lng.toFixed(4)}</p>
-          </div>
-        `)
-      
-      marker.addTo(map)
-    })
-
-    // Actualizar coordenadas al mover el cursor
+    
+    // Control de escala
+    L.control.scale().addTo(map)
+    
+    // Actualiza coordenadas del mouse
     map.on('mousemove', (e: any) => {
-      coordinates.value = `${e.latlng.lng.toFixed(3)}, ${e.latlng.lat.toFixed(3)} Grados`
-    })
-
-    // Agregar control de escala
-    L.control.scale({
-      position: 'bottomleft',
-      metric: true,
-      imperial: false
-    }).addTo(map)
-
-    // Forzar resize del mapa
-    nextTick(() => {
-      if (map) {
-        map.invalidateSize()
+      mouseCoords.value = {
+        lat: e.latlng.lat,
+        lon: e.latlng.lng
       }
     })
-
+    
+    // Carga los marcadores
+    await fetchMapMarkers()
   } catch (error) {
-    console.error('Error initializing map:', error)
+    console.error('Error inicializando mapa:', error)
   }
 }
 
-onMounted(() => {
-  nextTick(() => {
-    initMap()
+// ===== AGREGAR MARCADORES AL MAPA =====
+async function addMarkersToMap() {
+  // Esperar a que Leaflet esté disponible
+  const L = await import('leaflet').then(m => m.default)
+  
+  if (!map) return
+  
+  // Elimina marcadores anteriores
+  markers.forEach((marker: any) => {
+    map.removeLayer(marker)
   })
+  markers = []
+  
+  // Ícono personalizado (puntos de color vino/morado)
+  const customIcon = L.divIcon({
+    className: 'custom-marker',
+    html: '<div class="marker-dot"></div>',
+    iconSize: [10, 10],
+    iconAnchor: [5, 5],
+    popupAnchor: [0, -5]
+  })
+  
+  // Crea un marcador para cada institución
+  institutionsData.value.forEach((item: any) => {
+    const marker = L.marker([item.lat, item.lon], { icon: customIcon })
+      .addTo(map)
+      .bindPopup(
+        `<div class="marker-popup">
+          <strong>${item.institucion}</strong><br/>
+          <small>${item.sede}</small><br/>
+          <button onclick="window.mapClickMarker('${item.institucion_id}')">Ver Detalles</button>
+        </div>`
+      )
+    
+    markers.push(marker)
+  })
+  
+  console.log(`✓ ${markers.length} marcadores agregados al mapa`)
+}
+
+// ===== MANEJADORES DE EVENTOS =====
+function closeInfo() {
+  selectedInstitution.value = null
+}
+
+// Global function para click en popup
+;(window as any).mapClickMarker = (institucionId: string) => {
+  fetchInstitutionDetails(institucionId)
+}
+
+// ===== CICLO DE VIDA =====
+onMounted(async () => {
+  console.log('📍 Inicializando mapa...')
+  await initMap()
 })
 
 onUnmounted(() => {
@@ -124,54 +187,146 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.map-view {
-  height: 100%;
-  width: 100%;
-  position: relative;
-  overflow: hidden;
-}
-
 .map-container {
-  height: 100%;
+  position: relative;
   width: 100%;
-  background: #f0f8ff;
+  height: 100%;
 }
 
-.map-coordinates {
+#map {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.coords-display {
   position: absolute;
-  bottom: 30px;
-  left: 15px;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 6px 12px;
-  border-radius: 6px;
+  bottom: 10px;
+  left: 10px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 4px;
   font-size: 12px;
-  font-weight: 600;
-  color: #333;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  z-index: 1000;
+  z-index: 10;
+  font-family: monospace;
 }
 
-.map-scale {
+.info-panel {
   position: absolute;
-  bottom: 60px;
-  left: 15px;
-  z-index: 1000;
+  top: 10px;
+  right: 10px;
+  width: 350px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.close-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+}
+
+.institution-info h2 {
+  margin: 0 0 15px;
+  color: #333;
+  font-size: 18px;
+}
+
+.institution-info p {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.sedes-list {
+  margin-top: 20px;
+  border-top: 1px solid #eee;
+  padding-top: 15px;
+}
+
+.sedes-list h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
+  color: #333;
+}
+
+.sedes-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sede-item {
+  background: #f9f9f9;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.sede-item strong {
+  display: block;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.sede-item p {
+  margin: 4px 0;
+  color: #666;
+}
+
+.coords {
+  font-family: monospace;
+  font-size: 11px;
+  color: #999;
 }
 </style>
 
 <style>
-/* Estilos globales para el mapa */
+/* Estilos globales para Leaflet */
 .custom-marker {
   background: transparent !important;
   border: none !important;
 }
 
 .marker-dot {
-  width: 6px;
-  height: 6px;
-  background-color: #8B1538;
+  width: 8px;
+  height: 8px;
+  background-color: #663399;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.marker-popup {
+  font-size: 12px;
+  text-align: center;
+}
+
+.marker-popup button {
+  background: #663399;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+.marker-popup button:hover {
+  background: #553388;
 }
 
 .leaflet-popup-content-wrapper {
@@ -179,28 +334,7 @@ onUnmounted(() => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.popup-content h3 {
-  margin: 0 0 8px 0;
-  color: #2c3e50;
-  font-size: 14px;
-}
-
-.popup-content p {
-  margin: 4px 0;
-  font-size: 12px;
-  color: #666;
-}
-
 .leaflet-container {
   background: #f0f8ff;
-}
-
-.leaflet-control-scale-line {
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(0, 0, 0, 0.3);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: 11px;
-  color: #333;
 }
 </style>
