@@ -558,7 +558,7 @@ class Visita(models.Model):
         # COALESCE(sede_id::text, ''), fechavisita, COALESCE(programa, '')
         constraints = [
             models.UniqueConstraint(
-                fields=['sede_id', 'fechavisita', 'programa'],
+                fields=['institucion_id', 'sede_id', 'fechavisita', 'programa'],
                 name='uq_visita_sede_fecha_programa'
             )
         ]

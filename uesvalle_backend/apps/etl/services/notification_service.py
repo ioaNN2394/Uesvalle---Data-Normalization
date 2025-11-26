@@ -1,8 +1,8 @@
 import logging
 from django.db import transaction
 from django.utils import timezone
-from .models import Institucion, Visita, Notification
-from .services import MySQLExtractor
+from ..models import Institucion, Visita, Notification
+from ..services import MySQLExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -18,19 +18,10 @@ class NotificationService:
         1. Actualiza Supabase.
         2. Crea una notificación.
         """
-        extractor = MySQLExtractor()
-        conn = extractor._get_mysql_connection()
-        
-        if not conn:
-            logger.error("No se pudo conectar a MySQL para verificar actualizaciones.")
-            return 0
-
         try:
-            cursor = conn.cursor()
-            # Consulta para obtener la última visita por institución en MySQL
-            # Asumimos que la tabla es 'visitas_instituciones_educativos' y tiene 'identificacion' (uesvalle_ie_id)
-            # y 'conceptovisita'.
-            # Necesitamos la visita más reciente por institución.
+            # Usar MySQLExtractor para obtener los datos de MySQL
+            extractor = MySQLExtractor(db_alias='source_mysql')
+            
             query = """
                 SELECT 
                     v.identificacion, 
@@ -44,20 +35,28 @@ class NotificationService:
                 ) latest ON v.identificacion = latest.identificacion AND v.fechavisita = latest.max_fecha
                 WHERE v.conceptovisita IN ('F', 'D', 'FCR')
             """
-            cursor.execute(query)
-            mysql_results = cursor.fetchall()
+            
+            # Extraer datos de MySQL
+            result = extractor.extract(
+                table_name='visitas_instituciones_educativos',
+                query=query
+            )
+            
+            mysql_results = result.dataframe.values if result.dataframe is not None else []
+            logger.info(f"MySQL returned {len(mysql_results)} rows for concept check.")
             
             notifications_created = 0
 
             for row in mysql_results:
-                uesvalle_id = str(row[0]) # identificacion
-                new_concept = row[1]      # conceptovisita
-                fecha_visita = row[2]     # fechavisita
+                uesvalle_id = str(row[0])  # identificacion
+                new_concept = row[1]       # conceptovisita
+                fecha_visita = row[2]      # fechavisita
 
                 # Buscar la institución en Supabase
                 try:
                     institucion = Institucion.objects.get(uesvalle_ie_id=uesvalle_id)
                 except Institucion.DoesNotExist:
+                    # logger.debug(f"Institution {uesvalle_id} not found in Supabase.")
                     continue
 
                 # Buscar la última visita registrada en Supabase para esta institución
@@ -67,20 +66,11 @@ class NotificationService:
                 if last_visit:
                     old_concept = last_visit.conceptovisita
 
-                # Si no hay visita previa, o el concepto es diferente, y la fecha es más reciente o igual (para actualizar)
-                # Pero la notificación solo tiene sentido si CAMBIÓ el concepto respecto a lo que teníamos.
-                
+                # logger.debug(f"Checking {institucion.nombre} ({uesvalle_id}): Old={old_concept}, New={new_concept}")
+
                 # Caso 1: Ya teníamos una visita, y el concepto cambió
                 if last_visit and old_concept != new_concept:
-                    # Verificar si esta visita "nueva" de MySQL es realmente nueva o es una corrección de la misma fecha
-                    # O si es una fecha posterior.
-                    
-                    # Si la fecha de MySQL es posterior a la que tenemos, es una nueva visita -> Cambio de concepto
-                    # Si la fecha es la misma, puede ser una corrección -> Cambio de concepto
-                    
-                    # Actualizamos o creamos la visita en Supabase
-                    # Para simplificar, asumimos que si detectamos diferencia en la "última" visita, notificamos.
-                    
+                    logger.info(f"Change detected for {institucion.nombre}: {old_concept} -> {new_concept}")
                     # Crear notificación
                     Notification.objects.create(
                         institucion=institucion,
@@ -90,7 +80,13 @@ class NotificationService:
                     notifications_created += 1
                     
                     # Actualizar la visita en Supabase (o crear una nueva si la fecha es distinta)
-                    if last_visit.fechavisita == fecha_visita:
+                    # Convertir fecha_visita a date si es datetime para comparar
+                    if hasattr(fecha_visita, 'date'):
+                        fecha_visita_date = fecha_visita.date()
+                    else:
+                        fecha_visita_date = fecha_visita
+
+                    if last_visit.fechavisita == fecha_visita_date:
                         last_visit.conceptovisita = new_concept
                         last_visit.save()
                     else:
@@ -99,27 +95,21 @@ class NotificationService:
                             institucion_id=institucion.id,
                             fechavisita=fecha_visita,
                             conceptovisita=new_concept,
-                            # Otros campos se podrían llenar si hiciéramos un fetch completo
                         )
                 
                 # Caso 2: No teníamos visita, es la primera.
                 elif not last_visit:
-                     # Crear la visita
+                    logger.info(f"New visit detected for {institucion.nombre}: {new_concept}")
+                    # Crear la visita
                     Visita.objects.create(
                         institucion_id=institucion.id,
                         fechavisita=fecha_visita,
                         conceptovisita=new_concept
                     )
-                    # Opcional: Notificar "Nuevo concepto inicial"
-                    # El requerimiento dice "si una institucion antes tenia el concepto en F y luego paso a FCR"
-                    # Implica cambio. Si no tenía nada, tal vez no sea notificación de cambio.
-                    pass
 
+            logger.info(f"Check complete. Created {notifications_created} notifications.")
             return notifications_created
 
         except Exception as e:
-            logger.error(f"Error verificando actualizaciones: {e}")
+            logger.error(f"Error verificando actualizaciones: {e}", exc_info=True)
             return 0
-        finally:
-            if conn:
-                conn.close()
