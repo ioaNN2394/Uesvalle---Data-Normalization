@@ -5,6 +5,7 @@ Sigue el patrón dim_* (dimensiones) y fact_* (hechos) para el data warehouse.
 Estructura sincronizada EXACTAMENTE con Supabase PostgreSQL (2025-11-04).
 """
 import uuid
+from datetime import date as date_class
 from django.db import models
 
 
@@ -162,23 +163,95 @@ class ETLRun(models.Model):
 
 
 class Institucion(models.Model):
-    """Institución educativa - entidad principal."""
+    """
+    Institución educativa - entidad principal.
+    
+    Fuente de verdad: MySQL (tiene identificacion que es uesvalle_ie_id)
+    Fuente complementaria: CSV del DANE (tiene COD_DANE)
+    
+    Estrategia de sincronización (FASE 1 del instructivo):
+      - MySQL.identificacion → uesvalle_ie_id (SIEMPRE se guarda)
+      - MySQL.codigodane → dane_ie_id (si existe y coincide con CSV → enriquece)
+      - Si MySQL NO tiene codigodane → Usa solo datos MySQL (normalizado)
+      - MySQL se guarda SIEMPRE, CSV solo si hay coincidencia de DANE
+    
+    Clave única:
+      1. SI MySQL.codigodane existe → Usar como dane_ie_id (clave única)
+      2. SI MySQL.codigodane NO existe → Generar UUID único
+    """
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    nombre = models.TextField(verbose_name="Nombre de la institución")
+    nombre = models.TextField(
+        verbose_name="Nombre de la institución",
+        help_text="Nombre normalizado de la institución"
+    )
     
-    # IDs oficiales (pueden ser nulos)
-    dane_ie_id = models.TextField(null=True, blank=True, unique=True)
-    sed_ie_id = models.TextField(null=True, blank=True, unique=True) 
-    uesvalle_ie_id = models.TextField(null=True, blank=True, unique=True)
+    # IDs oficiales - Sincronización según instructivo
+    dane_ie_id = models.TextField(
+        null=True, 
+        blank=True, 
+        unique=True,
+        verbose_name="Código DANE IE",
+        help_text="11 dígitos - Viene de MySQL.codigodane o CSV.COD_DANE (si coincide)"
+    )
+    sed_ie_id = models.TextField(
+        null=True, 
+        blank=True, 
+        unique=True,
+        verbose_name="ID SED IE"
+    ) 
+    uesvalle_ie_id = models.TextField(
+        null=True, 
+        blank=True, 
+        unique=True,
+        verbose_name="ID UESValle IE",
+        help_text="OBLIGATORIO de MySQL.identificacion - Fuente de verdad"
+    )
     
     # Ubicación
-    codigo_municipio = models.TextField(null=True, blank=True)
+    codigo_municipio = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Código municipio",
+        help_text="Debe existir en dim_municipio (FK)"
+    )
     direccion = models.TextField(null=True, blank=True)
     telefono = models.TextField(null=True, blank=True)
     email = models.TextField(null=True, blank=True)
-    estado = models.TextField(null=True, blank=True)
-    metadata = models.JSONField(default=dict, blank=True)
+    
+    # Coordenadas geográficas (directo en institución, sin sedes)
+    lat = models.DecimalField(
+        max_digits=10, 
+        decimal_places=7, 
+        null=True, 
+        blank=True,
+        verbose_name="Latitud",
+        help_text="Coordenada de latitud - viene del CSV enriquecido"
+    )
+    lon = models.DecimalField(
+        max_digits=10, 
+        decimal_places=7, 
+        null=True, 
+        blank=True,
+        verbose_name="Longitud",
+        help_text="Coordenada de longitud - viene del CSV enriquecido"
+    )
+    
+    estado = models.TextField(
+        null=True, 
+        blank=True,
+        default='ACTIVA',
+        verbose_name="Estado",
+        help_text="Default: ACTIVA"
+    )
+    
+    # Metadata para tracking de origen
+    metadata = models.JSONField(
+        default=dict, 
+        blank=True,
+        verbose_name="Metadata",
+        help_text="Incluye: origen (mysql/csv/ambos), campos_enriquecidos"
+    )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -189,6 +262,10 @@ class Institucion(models.Model):
         db_table = 'uesvalle"."institucion'
         managed = True
         ordering = ['nombre']
+        indexes = [
+            models.Index(fields=['uesvalle_ie_id']),
+            models.Index(fields=['codigo_municipio']),
+        ]
     
     def __str__(self):
         return self.nombre
@@ -328,16 +405,140 @@ class PaeAsignacion(models.Model):
 
 
 class Visita(models.Model):
-    """Hechos de visitas a instituciones/sedes."""
+    """
+    Hechos de visitas a instituciones/sedes.
+    
+    Fuente principal: MySQL (tabla visitas_instituciones_educativos)
+    Campos mapeados desde MySQL:
+      - identificacion → institucion.uesvalle_ie_id (para buscar institucion_id)
+      - codigodane → institucion.dane_ie_id (para buscar institucion_id)
+      - fechavisita → fechavisita
+      - nombreactividad → nombreactividad
+      - codigotipoobjeto → codigotipoobjeto
+      - nombretipoobjeto → nombretipoobjeto
+      - conceptovisita → conceptovisita (validar: F, D, FCR)
+      - requerimientos → requerimientos
+      - motivovisita → motivovisita
+      - nombrefuncionario → nombrefuncionario
+      - apellidofuncionario → apellidofuncionario
+      - codigofuncionario → codigofuncionario
+    """
     
     id = models.BigAutoField(primary_key=True)
-    sede_id = models.UUIDField(null=True, blank=True)
-    institucion_id = models.UUIDField(null=True, blank=True)
-    fecha = models.DateField()
-    programa = models.TextField(null=True, blank=True)
-    resultado = models.TextField(null=True, blank=True)
-    observaciones = models.TextField(null=True, blank=True)
-    metadata = models.JSONField(default=dict, blank=True)
+    
+    # FK a institución (OBLIGATORIO según instructivo, pero nullable para migraciones)
+    institucion_id = models.UUIDField(
+        null=True,
+        blank=True,
+        verbose_name="Institución",
+        help_text="FK obligatoria en producción - debe existir en tabla institucion"
+    )
+    
+    # FK a sede (OPCIONAL - puede ser NULL)
+    sede_id = models.UUIDField(
+        null=True, 
+        blank=True,
+        verbose_name="Sede",
+        help_text="FK opcional - puede ser NULL si no hay sedes"
+    )
+    
+    # Fecha de visita (OBLIGATORIO)
+    fechavisita = models.DateField(
+        default=date_class.today,
+        verbose_name="Fecha de visita",
+        help_text="Formato DATE válido (YYYY-MM-DD), obligatorio",
+        db_index=True
+    )
+    
+    # Campos de actividad
+    nombreactividad = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Nombre de actividad"
+    )
+    codigotipoobjeto = models.IntegerField(
+        null=True, 
+        blank=True,
+        verbose_name="Código tipo objeto",
+        help_text="Convertido a INT desde MySQL"
+    )
+    nombretipoobjeto = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Nombre tipo objeto"
+    )
+    
+    # Concepto de visita (validar: F, D, FCR)
+    CONCEPTO_CHOICES = [
+        ('F', 'Favorable'),
+        ('D', 'Desfavorable'),
+        ('FCR', 'Favorable con Requerimientos'),
+    ]
+    conceptovisita = models.CharField(
+        max_length=3,
+        null=True, 
+        blank=True,
+        choices=CONCEPTO_CHOICES,
+        verbose_name="Concepto de visita",
+        help_text="Debe ser F (Favorable), D (Desfavorable) o FCR (Favorable con Requerimientos)"
+    )
+    
+    # Campos adicionales de visita
+    requerimientos = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Requerimientos"
+    )
+    motivovisita = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Motivo de visita"
+    )
+    
+    # Datos del funcionario
+    nombrefuncionario = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Nombre del funcionario"
+    )
+    apellidofuncionario = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Apellido del funcionario"
+    )
+    codigofuncionario = models.IntegerField(
+        null=True, 
+        blank=True,
+        verbose_name="Código del funcionario",
+        help_text="Convertido a INT desde MySQL"
+    )
+    
+    # Campos adicionales opcionales
+    programa = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Programa",
+        help_text="Usado para índice único de duplicados"
+    )
+    resultado = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Resultado"
+    )
+    observacion = models.TextField(
+        null=True, 
+        blank=True,
+        verbose_name="Observación"
+    )
+    
+    # Metadata para campos extras y origen
+    metadata = models.JSONField(
+        default=dict, 
+        blank=True,
+        verbose_name="Metadata",
+        help_text="Campos adicionales de MySQL no mapeados directamente"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -346,15 +547,34 @@ class Visita(models.Model):
         verbose_name = "Visita"
         verbose_name_plural = "Visitas"
         managed = True
-        ordering = ['-fecha']
+        ordering = ['-fechavisita']
         indexes = [
             models.Index(fields=['sede_id']),
             models.Index(fields=['institucion_id']),
-            models.Index(fields=['fecha']),
+            models.Index(fields=['fechavisita']),
+            models.Index(fields=['programa']),
+        ]
+        # Índice único para manejo de duplicados según instructivo
+        # COALESCE(sede_id::text, ''), fechavisita, COALESCE(programa, '')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['sede_id', 'fechavisita', 'programa'],
+                name='uq_visita_sede_fecha_programa'
+            )
         ]
     
     def __str__(self):
-        return f"Visita {self.fecha} - {self.programa or 'Sin programa'}"
+        return f"Visita {self.fechavisita} - {self.nombreactividad or self.programa or 'Sin programa'}"
+    
+    def clean(self):
+        """Validaciones personalizadas según instructivo."""
+        from django.core.exceptions import ValidationError
+        
+        # Validar conceptovisita
+        if self.conceptovisita and self.conceptovisita not in ['F', 'D', 'FCR']:
+            raise ValidationError({
+                'conceptovisita': f"Valor '{self.conceptovisita}' no válido. Debe ser F, D o FCR."
+            })
 
 
 class ETLFile(models.Model):

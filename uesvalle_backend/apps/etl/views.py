@@ -468,27 +468,58 @@ class MapMarkersView(APIView):
         try:
             from django.db import connection
             
-            # Obtén datos directamente de la BD con JOIN
+            # Obtener filtros de query params
+            conceptos = request.query_params.get('conceptos', '') # F,D,FCR
+            fecha_inicio = request.query_params.get('fecha_inicio', '')
+            fecha_fin = request.query_params.get('fecha_fin', '')
+            
+            # Construir query base
+            sql = """
+                SELECT DISTINCT
+                    i.id as institucion_id,
+                    i.nombre as institucion,
+                    i.dane_ie_id,
+                    i.email,
+                    i.telefono,
+                    i.direccion,
+                    i.estado,
+                    i.lat,
+                    i.lon,
+                    i.codigo_municipio
+                FROM uesvalle.institucion i
+            """
+            
+            # Si hay filtros, hacer JOIN con visita
+            params = []
+            where_clauses = ["i.lat IS NOT NULL", "i.lon IS NOT NULL"]
+            
+            has_filters = conceptos or (fecha_inicio and fecha_fin)
+            
+            if has_filters:
+                sql += " INNER JOIN uesvalle.visita v ON i.id = v.institucion_id "
+                
+                # Filtro Concepto
+                if conceptos:
+                    lista_conceptos = [c.strip() for c in conceptos.split(',') if c.strip()]
+                    if lista_conceptos:
+                        placeholders = ', '.join(['%s'] * len(lista_conceptos))
+                        where_clauses.append(f"v.conceptovisita IN ({placeholders})")
+                        params.extend(lista_conceptos)
+                
+                # Filtro Fecha
+                if fecha_inicio and fecha_fin:
+                    where_clauses.append("v.fechavisita BETWEEN %s AND %s")
+                    params.extend([fecha_inicio, fecha_fin])
+            
+            # Combinar WHERE
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
+            
+            sql += " ORDER BY i.nombre"
+            
+            # Ejecutar query
             with connection.cursor() as cursor:
-                cursor.execute("""
-                    SELECT 
-                        s.id as sede_id,
-                        s.nombre as sede,
-                        i.nombre as institucion,
-                        i.id as institucion_id,
-                        i.dane_ie_id,
-                        i.email,
-                        i.telefono,
-                        i.direccion,
-                        i.estado,
-                        s.lat,
-                        s.lon,
-                        s.codigo_municipio
-                    FROM uesvalle.sede s
-                    INNER JOIN uesvalle.institucion i ON s.institucion_id = i.id
-                    WHERE s.lat IS NOT NULL AND s.lon IS NOT NULL
-                    ORDER BY i.nombre, s.nombre
-                """)
+                cursor.execute(sql, params)
                 
                 columns = [col[0] for col in cursor.description]
                 markers = []
@@ -496,11 +527,13 @@ class MapMarkersView(APIView):
                 for row in cursor.fetchall():
                     marker = dict(zip(columns, row))
                     # Convierte Decimal a float para JSON
-                    marker['lat'] = float(marker['lat']) if marker['lat'] else None
-                    marker['lon'] = float(marker['lon']) if marker['lon'] else None
+                    marker['lat'] = float(marker['lat']) if marker['lat'] is not None else None
+                    marker['lon'] = float(marker['lon']) if marker['lon'] is not None else None
+                    # Agregar campo 'sede' vacío para compatibilidad temporal si es necesario
+                    marker['sede'] = '' 
                     markers.append(marker)
             
-            logger.info(f"Retornando {len(markers)} marcadores para el mapa")
+            logger.info(f"Retornando {len(markers)} marcadores para el mapa (Filtros: {conceptos}, {fecha_inicio}-{fecha_fin})")
             
             return Response({
                 'status': 'success',
@@ -562,6 +595,8 @@ class MapDetailsView(APIView):
                     'telefono': institucion.telefono,
                     'email': institucion.email,
                     'estado': institucion.estado,
+                    'lat': float(institucion.lat) if institucion.lat else None,
+                    'lon': float(institucion.lon) if institucion.lon else None,
                     'sedes': sedes_list
                 }
             }, status=status.HTTP_200_OK)
@@ -578,3 +613,26 @@ class MapDetailsView(APIView):
                 'status': 'error',
                 'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class InstitutionSearchView(APIView):
+    """
+    Búsqueda de instituciones por nombre, código DANE o código UESValle.
+    GET /api/map/search/?q=...
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        query = request.query_params.get('q', '').strip()
+        if not query:
+            return Response([])
+
+        results = Institucion.objects.filter(
+            Q(nombre__icontains=query) |
+            Q(dane_ie_id__icontains=query) |
+            Q(uesvalle_ie_id__icontains=query)
+        ).values(
+            'id', 'nombre', 'dane_ie_id', 'uesvalle_ie_id', 'lat', 'lon'
+        )[:10]
+
+        return Response(list(results))

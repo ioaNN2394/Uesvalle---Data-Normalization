@@ -53,99 +53,30 @@ def etl_run_job(self,
         # Actualizar estado en Celery
         self.update_state(
             state='PROGRESS',
-            meta={'current': 0, 'total': 3, 'stage': 'extraction'}
+            meta={'current': 0, 'total': 3, 'stage': 'starting'}
         )
         
-        # Obtener ETLRun
-        etl_run = ETLRun.objects.get(id=etl_run_id)
-        etl_run.status = 'running'
-        etl_run.save(update_fields=['status'])
-        
+        # Crear orchestrator y ejecutar el pipeline completo (BULK OPERATIONS)
         orchestrator = ETLOrchestrator(etl_run_id=etl_run_id)
         
-        # Procesar archivos con validación de departamento
-        files = ETLFile.objects.filter(etl_run_id=etl_run_id, status='pending')
-        total_procesados = 0
-        total_removidos = 0
+        # Ejecutar el pipeline completo con BULK OPERATIONS
+        # Este método maneja todo: extracción, transformación y carga
+        success = orchestrator.execute(dry_run=dry_run, cancel_on_error=cancel_on_error)
         
-        for etl_file in files:
-            logger.info(f"📋 Procesando: {etl_file.filename}")
-            etl_file.status = 'processing'
-            etl_file.save(update_fields=['status'])
-            
-            try:
-                if etl_file.file_type == 'csv':
-                    # Lee el CSV
-                    df = RobustCSVParser.parse_csv(etl_file.file_path)
-                    
-                    # ⭐ Procesa con validación de departamento
-                    procesados, removidos = orchestrator.process_csv_data(df, etl_file)
-                    
-                    total_procesados += procesados
-                    total_removidos += removidos
-                    
-                    etl_file.status = 'completed'
-                    etl_file.rows_processed = procesados
-                    etl_file.rows_failed = removidos
-                    
-                elif etl_file.file_type in ['excel', 'xlsx', 'xls']:
-                    # Lee el Excel
-                    df = pd.read_excel(etl_file.file_path, sheet_name=0)
-                    
-                    # ⭐ Procesa con validación de departamento
-                    procesados, removidos = orchestrator.process_csv_data(df, etl_file)
-                    
-                    total_procesados += procesados
-                    total_removidos += removidos
-                    
-                    etl_file.status = 'completed'
-                    etl_file.rows_processed = procesados
-                    etl_file.rows_failed = removidos
-                
-                etl_file.save(update_fields=['status', 'rows_processed', 'rows_failed'])
-            
-            except Exception as e:
-                logger.error(f"❌ Error procesando archivo: {str(e)}")
-                etl_file.status = 'failed'
-                etl_file.error_message = str(e)
-                etl_file.save(update_fields=['status', 'error_message'])
-                
-                if cancel_on_error:
-                    etl_run.status = 'failed'
-                    etl_run.meta = {
-                        'error': str(e),
-                        'total_procesados': total_procesados,
-                        'total_removidos': total_removidos
-                    }
-                    etl_run.save(update_fields=['status', 'meta'])
-                    
-                    return {
-                        'status': 'failure',
-                        'etl_run_id': etl_run_id,
-                        'error': str(e)
-                    }
-        
-        # Finalizar
-        etl_run.status = 'completed'
-        etl_run.finished_at = timezone.now()
-        etl_run.meta = {
-            'total_procesados': total_procesados,
-            'total_removidos': total_removidos,
-            'mensaje': f'Completado: {total_procesados} registros del Valle del Cauca procesados, {total_removidos} descartados'
-        }
-        etl_run.save(update_fields=['status', 'finished_at', 'meta'])
-        
-        logger.info(f"✅ ETL job {etl_run_id} completado")
-        logger.info(f"   Procesados (Valle del Cauca): {total_procesados}")
-        logger.info(f"   Descartados (otros depts): {total_removidos}")
-        
-        return {
-            'status': 'success',
-            'etl_run_id': etl_run_id,
-            'total_procesados': total_procesados,
-            'total_removidos': total_removidos,
-            'error': None
-        }
+        if success:
+            logger.info(f"✅ ETL job {etl_run_id} completado exitosamente")
+            return {
+                'status': 'success',
+                'etl_run_id': etl_run_id,
+                'error': None
+            }
+        else:
+            logger.error(f"❌ ETL job {etl_run_id} falló")
+            return {
+                'status': 'failure',
+                'etl_run_id': etl_run_id,
+                'error': 'Pipeline ETL falló - ver logs para detalles'
+            }
             
     except ETLRun.DoesNotExist:
         error_msg = f"ETLRun {etl_run_id} no encontrado"

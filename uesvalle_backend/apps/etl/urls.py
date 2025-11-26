@@ -14,7 +14,7 @@ Rutas principales:
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views_v2
-from .views import MapMarkersView, MapDetailsView
+from .views import MapMarkersView, MapDetailsView, InstitutionSearchView
 
 # Router para ViewSet de Jobs
 router = DefaultRouter()
@@ -32,6 +32,7 @@ urlpatterns = [
     # Map endpoints
     path('map/markers/', MapMarkersView.as_view(), name='map-markers'),
     path('map/institucion/<uuid:institucion_id>/', MapDetailsView.as_view(), name='map-details'),
+    path('map/search/', InstitutionSearchView.as_view(), name='map-search'),
 ]
 
 app_name = 'etl'

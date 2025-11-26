@@ -12,57 +12,70 @@ class RobustCSVParser:
     """
     
     @staticmethod
-    def parse_csv(file_path: str, delimiter=';', encoding='utf-8-sig') -> pd.DataFrame:
+    def parse_csv(file_path: str, delimiter=';', encoding=None) -> pd.DataFrame:
         """
-        Parsea CSV de forma segura sin confundir delimitadores internos.
-        
-        ⭐ encoding='utf-8-sig' automáticamente elimina el BOM (\ufeff)
+        Parsea CSV de forma segura intentando múltiples encodings.
         """
-        try:
-            rows = []
-            headers = None
+        encodings_to_try = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        if encoding:
+            encodings_to_try.insert(0, encoding)
             
-            # ⭐ IMPORTANTE: 'utf-8-sig' elimina el BOM automáticamente
-            with open(file_path, 'r', encoding=encoding) as f:
-                # Lee línea por línea
-                for line_num, line in enumerate(f, 1):
-                    line = line.rstrip('\n\r')
-                    
-                    # Split SOLAMENTE por el delimitador
-                    fields = line.split(delimiter)
-                    
-                    if line_num == 1:
-                        # ⭐ LIMPIA headers: elimina espacios, BOM y pasa a mayúsculas
-                        headers = [h.strip().upper() for h in fields]
-                        logger.info(f"Headers detectados: {len(headers)} columnas")
-                        logger.debug(f"Headers: {headers}")
-                        continue
-                    
-                    # Limpia espacios en cada campo
-                    fields = [f.strip() for f in fields]
-                    
-                    # Ajusta cantidad de campos si es necesario
-                    if len(fields) != len(headers):
-                        logger.debug(f"Línea {line_num}: campos={len(fields)}, esperados={len(headers)}")
+        last_error = None
+        
+        for enc in encodings_to_try:
+            try:
+                logger.info(f"Intentando leer CSV con encoding: {enc}")
+                rows = []
+                headers = None
+                
+                with open(file_path, 'r', encoding=enc) as f:
+                    # Lee línea por línea
+                    for line_num, line in enumerate(f, 1):
+                        line = line.rstrip('\n\r')
                         
-                        # Si tiene menos, añade vacíos
-                        if len(fields) < len(headers):
-                            fields.extend([''] * (len(headers) - len(fields)))
-                        # Si tiene más, trunca
-                        elif len(fields) > len(headers):
-                            fields = fields[:len(headers)]
-                    
-                    rows.append(fields)
-            
-            # Crea DataFrame
-            df = pd.DataFrame(rows, columns=headers)
-            
-            logger.info(f"✅ Parseado correctamente: {len(df)} filas x {len(headers)} columnas")
-            return df
+                        # Split SOLAMENTE por el delimitador
+                        fields = line.split(delimiter)
+                        
+                        if line_num == 1:
+                            # ⭐ LIMPIA headers: elimina espacios, BOM y pasa a mayúsculas
+                            headers = [h.strip().upper() for h in fields]
+                            # Validar que parezca un CSV válido (al menos 1 columna)
+                            if not headers or (len(headers) == 1 and not headers[0]):
+                                raise ValueError("CSV parece vacío o mal delimitado")
+                            continue
+                        
+                        # Limpia espacios en cada campo
+                        fields = [f.strip() for f in fields]
+                        
+                        # Ajusta cantidad de campos si es necesario
+                        if len(fields) != len(headers):
+                            # Si tiene menos, añade vacíos
+                            if len(fields) < len(headers):
+                                fields.extend([''] * (len(headers) - len(fields)))
+                            # Si tiene más, recorta
+                            else:
+                                fields = fields[:len(headers)]
+                        
+                        rows.append(fields)
+                
+                # Si llegamos aquí, funcionó
+                logger.info(f"✓ CSV leído exitosamente con {enc}")
+                df = pd.DataFrame(rows, columns=headers)
+                logger.info(f"✅ Parseado correctamente: {len(df)} filas x {len(headers)} columnas")
+                return df
+                
+            except UnicodeDecodeError as e:
+                logger.warning(f"Falló encoding {enc}: {e}")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.warning(f"Error con encoding {enc}: {e}")
+                last_error = e
+                continue
         
-        except Exception as e:
-            logger.error(f"❌ Error parseando CSV: {str(e)}")
-            raise
+        # Si fallan todos
+        logger.error(f"❌ Error parseando CSV: {str(last_error)}")
+        raise last_error or ValueError("No se pudo leer el CSV con ningún encoding estándar")
     
     @staticmethod
     def validate_coordinates(df: pd.DataFrame, lon_col='LONGITUD', lat_col='LATITUD') -> tuple:

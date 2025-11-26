@@ -142,3 +142,221 @@ class DepartmentValidator:
         logger.info(f"Filtrado por departamento: {rows_kept} conservadas, {rows_removed} removidas")
         
         return df_filtered, rows_removed, rows_kept
+
+
+class VisitaValidator:
+    """
+    Validador para datos de visitas según FASE 6 del instructivo.
+    
+    Validaciones:
+      - institucion_id: OBLIGATORIO (FK)
+      - sede_id: OPCIONAL (puede ser NULL)
+      - fechavisita: Formato DATE válido, OBLIGATORIO
+      - conceptovisita: Si existe, debe ser F/D/FCR
+      - codigotipoobjeto: Si existe, debe ser INT válido
+      - codigofuncionario: Si existe, debe ser INT válido
+      - nombreactividad, nombrefuncionario, apellidofuncionario: Strings normalizados
+    """
+    
+    # Valores válidos para conceptovisita
+    CONCEPTO_VALIDOS = {'F', 'D', 'FCR'}
+    
+    @staticmethod
+    def validate_conceptovisita(value: str) -> tuple:
+        """
+        Valida que conceptovisita sea F, D o FCR.
+        
+        Args:
+            value: Valor a validar
+        
+        Returns:
+            tuple: (es_valido: bool, valor_normalizado: str o None, mensaje_error: str o None)
+        """
+        if not value:
+            return True, None, None  # NULL es válido
+        
+        normalized = str(value).upper().strip()
+        
+        if normalized in VisitaValidator.CONCEPTO_VALIDOS:
+            return True, normalized, None
+        
+        return False, None, f"Valor '{value}' no válido. Debe ser F, D o FCR"
+    
+    @staticmethod
+    def validate_fechavisita(value) -> tuple:
+        """
+        Valida que fechavisita sea una fecha válida.
+        
+        Args:
+            value: Valor de fecha (string, datetime, date)
+        
+        Returns:
+            tuple: (es_valido: bool, fecha_normalizada: date o None, mensaje_error: str o None)
+        """
+        if not value:
+            return False, None, "fechavisita es obligatorio"
+        
+        try:
+            import pandas as pd
+            from datetime import date, datetime
+            
+            if isinstance(value, date):
+                return True, value, None
+            
+            if isinstance(value, datetime):
+                return True, value.date(), None
+            
+            # Intentar parsear string
+            parsed = pd.to_datetime(value, errors='coerce')
+            if pd.isna(parsed):
+                return False, None, f"Formato de fecha no reconocido: {value}"
+            
+            return True, parsed.date(), None
+            
+        except Exception as e:
+            return False, None, f"Error parseando fecha: {str(e)}"
+    
+    @staticmethod
+    def validate_codigo_int(value, campo_nombre: str) -> tuple:
+        """
+        Valida que un código sea convertible a INT.
+        
+        Args:
+            value: Valor a validar
+            campo_nombre: Nombre del campo para mensajes de error
+        
+        Returns:
+            tuple: (es_valido: bool, valor_int: int o None, mensaje_error: str o None)
+        """
+        if not value:
+            return True, None, None  # NULL es válido
+        
+        try:
+            # Eliminar decimales .0 comunes
+            cleaned = str(value).replace('.0', '').strip()
+            if cleaned.lower() in ['nan', 'none', '']:
+                return True, None, None
+            
+            int_val = int(float(cleaned))
+            return True, int_val, None
+            
+        except (ValueError, TypeError) as e:
+            return False, None, f"{campo_nombre} '{value}' no es un entero válido"
+    
+    @staticmethod
+    def validate_dane_ie_id(value: str) -> tuple:
+        """
+        Valida código DANE de institución (11 dígitos numéricos).
+        
+        Args:
+            value: Código DANE a validar
+        
+        Returns:
+            tuple: (es_valido: bool, valor_normalizado: str o None, mensaje_error: str o None)
+        """
+        if not value:
+            return True, None, None  # NULL es válido
+        
+        cleaned = str(value).strip().replace('.0', '')
+        
+        if not cleaned:
+            return True, None, None
+        
+        # Verificar que sea numérico
+        if not cleaned.isdigit():
+            return False, None, f"DANE '{value}' debe ser numérico"
+        
+        # Verificar longitud (generalmente 11 dígitos)
+        if len(cleaned) < 10 or len(cleaned) > 12:
+            logger.warning(f"DANE '{cleaned}' tiene longitud inusual: {len(cleaned)} dígitos")
+        
+        return True, cleaned, None
+    
+    @staticmethod
+    def normalize_string(value: str, max_length: int = None) -> str:
+        """
+        Normaliza string: trim, elimina caracteres problemáticos.
+        
+        Args:
+            value: String a normalizar
+            max_length: Longitud máxima (opcional)
+        
+        Returns:
+            str: String normalizado o None si estaba vacío
+        """
+        if not value:
+            return None
+        
+        normalized = str(value).strip()
+        
+        if not normalized or normalized.lower() in ['nan', 'none']:
+            return None
+        
+        if max_length and len(normalized) > max_length:
+            normalized = normalized[:max_length]
+        
+        return normalized
+    
+    @classmethod
+    def validate_visita(cls, data: dict) -> tuple:
+        """
+        Valida un registro de visita completo.
+        
+        Args:
+            data: Diccionario con datos de la visita
+        
+        Returns:
+            tuple: (es_valido: bool, data_normalizado: dict, errores: list)
+        """
+        errores = []
+        data_norm = data.copy()
+        
+        # 1. Validar institucion_id (OBLIGATORIO)
+        if not data.get('institucion_id'):
+            errores.append("institucion_id es obligatorio")
+        
+        # 2. Validar fechavisita (OBLIGATORIO)
+        valid, fecha_norm, error = cls.validate_fechavisita(data.get('fechavisita'))
+        if not valid:
+            errores.append(error)
+        else:
+            data_norm['fechavisita'] = fecha_norm
+        
+        # 3. Validar conceptovisita (OPCIONAL, pero si existe debe ser F/D/FCR)
+        valid, concepto_norm, error = cls.validate_conceptovisita(data.get('conceptovisita'))
+        if not valid:
+            logger.warning(f"⚠️ {error} - dejando NULL")
+            data_norm['conceptovisita'] = None
+        else:
+            data_norm['conceptovisita'] = concepto_norm
+        
+        # 4. Validar codigotipoobjeto (OPCIONAL, debe ser INT)
+        valid, codigo_norm, error = cls.validate_codigo_int(
+            data.get('codigotipoobjeto'), 'codigotipoobjeto'
+        )
+        if not valid:
+            logger.debug(f"⚠️ {error} - dejando NULL")
+            data_norm['codigotipoobjeto'] = None
+        else:
+            data_norm['codigotipoobjeto'] = codigo_norm
+        
+        # 5. Validar codigofuncionario (OPCIONAL, debe ser INT)
+        valid, codigo_norm, error = cls.validate_codigo_int(
+            data.get('codigofuncionario'), 'codigofuncionario'
+        )
+        if not valid:
+            logger.debug(f"⚠️ {error} - dejando NULL")
+            data_norm['codigofuncionario'] = None
+        else:
+            data_norm['codigofuncionario'] = codigo_norm
+        
+        # 6. Normalizar strings
+        for campo in ['nombreactividad', 'nombretipoobjeto', 'requerimientos', 
+                      'motivovisita', 'nombrefuncionario', 'apellidofuncionario',
+                      'programa', 'resultado', 'observacion']:
+            data_norm[campo] = cls.normalize_string(data.get(campo))
+        
+        # Determinar si es válido (errores críticos = institucion_id y fechavisita)
+        es_valido = len(errores) == 0
+        
+        return es_valido, data_norm, errores

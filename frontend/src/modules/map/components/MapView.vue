@@ -14,9 +14,10 @@
         <p><strong>Teléfono:</strong> {{ selectedInstitution.telefono || 'N/A' }}</p>
         <p><strong>Email:</strong> {{ selectedInstitution.email || 'N/A' }}</p>
         <p><strong>Estado:</strong> {{ selectedInstitution.estado }}</p>
+        <p v-if="selectedInstitution.lat"><strong>Coordenadas:</strong> {{ selectedInstitution.lat.toFixed(6) }}, {{ selectedInstitution.lon.toFixed(6) }}</p>
         
         <!-- Sedes de la institución -->
-        <div class="sedes-list">
+        <div class="sedes-list" v-if="selectedInstitution.sedes && selectedInstitution.sedes.length > 0">
           <h3>Sedes ({{ selectedInstitution.sedes?.length || 0 }})</h3>
           <ul>
             <li v-for="sede in selectedInstitution.sedes" :key="sede.id" class="sede-item">
@@ -37,7 +38,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { useMapControls } from '../../../shared/composables/useMapControls'
+
+const { zoomAction, filterState, selectedInstitutionAction } = useMapControls()
 
 const mapContainer = ref<HTMLDivElement>()
 let map: any = null
@@ -50,7 +54,28 @@ const institutionsData = ref<any[]>([])
 // ===== API CALLS =====
 async function fetchMapMarkers() {
   try {
-    const response = await fetch('/api/etl/map/markers/')
+    // Construir query params
+    const params = new URLSearchParams()
+    
+    if (filterState.conceptos && filterState.conceptos.length > 0) {
+      // Enviar como string separado por comas para que el backend lo procese con split(',')
+      params.append('conceptos', filterState.conceptos.join(','))
+    }
+    
+    if (filterState.fechaInicio) {
+      params.append('fecha_inicio', filterState.fechaInicio)
+    }
+    
+    if (filterState.fechaFin) {
+      params.append('fecha_fin', filterState.fechaFin)
+    }
+
+    const queryString = params.toString()
+    const url = `/api/etl/map/markers/${queryString ? '?' + queryString : ''}`
+    
+    console.log('Fetching markers with URL:', url)
+
+    const response = await fetch(url)
     const data = await response.json()
     
     if (data.status === 'success') {
@@ -65,17 +90,54 @@ async function fetchMapMarkers() {
 
 async function fetchInstitutionDetails(institucionId: string) {
   try {
+    console.log('Fetching details for:', institucionId)
     const response = await fetch(`/api/etl/map/institucion/${institucionId}/`)
     const data = await response.json()
     
     if (data.status === 'success') {
       selectedInstitution.value = data.institucion
-      console.log('✓ Detalles de institución cargados')
+      console.log('✓ Detalles de institución cargados:', data.institucion)
     }
   } catch (error) {
     console.error('Error obteniendo detalles:', error)
   }
 }
+
+// ===== WATCHERS =====
+watch(zoomAction, (newAction) => {
+  if (!map || !newAction) return
+  
+  if (newAction === 'in') {
+    map.zoomIn()
+  } else if (newAction === 'out') {
+    map.zoomOut()
+  } else if (newAction === 'reset') {
+    map.setView([3.8, -76.3], 9)
+  }
+})
+
+watch(filterState, () => {
+  console.log('Filtros cambiaron, recargando mapa...')
+  fetchMapMarkers()
+}, { deep: true })
+
+watch(selectedInstitutionAction, (action) => {
+  if (!map) {
+    console.warn('Map not initialized when selection triggered')
+    return
+  }
+  if (!action) return
+  
+  console.log('Centering map on:', action)
+  try {
+    map.flyTo([action.lat, action.lon], 15, {
+      duration: 1.5
+    })
+    fetchInstitutionDetails(action.id)
+  } catch (e) {
+    console.error('Error flying to location:', e)
+  }
+})
 
 // ===== INICIALIZACIÓN DEL MAPA =====
 async function initMap() {
@@ -147,17 +209,19 @@ async function addMarkersToMap() {
   
   // Crea un marcador para cada institución
   institutionsData.value.forEach((item: any) => {
-    const marker = L.marker([item.lat, item.lon], { icon: customIcon })
-      .addTo(map)
-      .bindPopup(
-        `<div class="marker-popup">
-          <strong>${item.institucion}</strong><br/>
-          <small>${item.sede}</small><br/>
-          <button onclick="window.mapClickMarker('${item.institucion_id}')">Ver Detalles</button>
-        </div>`
-      )
-    
-    markers.push(marker)
+    // Validar coordenadas antes de crear marcador
+    if (item.lat != null && item.lon != null && !isNaN(item.lat) && !isNaN(item.lon)) {
+      const marker = L.marker([item.lat, item.lon], { icon: customIcon })
+        .addTo(map)
+        .bindPopup(
+          `<div class="marker-popup">
+            <strong>${item.institucion}</strong><br/>
+            <button onclick="window.mapClickMarker('${item.institucion_id}')">Ver Detalles</button>
+          </div>`
+        )
+      
+      markers.push(marker)
+    }
   })
   
   console.log(`✓ ${markers.length} marcadores agregados al mapa`)

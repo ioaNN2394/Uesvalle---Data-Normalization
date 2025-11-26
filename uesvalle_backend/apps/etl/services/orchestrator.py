@@ -2,11 +2,23 @@
 Orchestrator: Coordina el flujo completo Extract-Transform-Load
 ================================================================
 
+IMPLEMENTA INSTRUCTIVO DETALLADO: ETL CON SINCRONIZACIÓN MySQL + CSV
+
+Arquitectura de datos:
+- Fuente de verdad: MySQL (tiene identificacion = uesvalle_ie_id)
+- Fuente complementaria: CSV del DANE (tiene COD_DANE)
+
+Orden de procesamiento (CRÍTICO - no cambiar):
+  1️⃣ CARGAR MUNICIPIOS
+  2️⃣ CARGAR INSTITUCIONES (MySQL + CSV merge)
+  3️⃣ CARGAR SEDES (CSV vinculadas a instituciones)  
+  4️⃣ CARGAR VISITAS (MySQL vinculadas a instituciones/sedes)
+
 Responsabilidades:
 - Orquestar fases E-T-L en secuencia
 - Actualizar estado de ETLRun
-- Registrar errores
-- Calcular métricas
+- Registrar errores y métricas
+- Coordinar sincronización MySQL + CSV
 """
 
 import json
@@ -26,18 +38,23 @@ from ..utils.csv_parser import RobustCSVParser
 from ..utils.normalizer import Normalizer
 from ..utils.validators import DepartmentValidator
 from ..utils.data_transformers import transformar_maestras_csv, transformar_visitas_mysql
+from .sync_processor import MySQLCSVSyncProcessor, ETLMetrics
 
 logger = logging.getLogger('etl.orchestrator')
 
 
 class ETLOrchestrator:
     """
-    Coordina el pipeline ETL completo.
+    Coordina el pipeline ETL completo con sincronización MySQL + CSV.
     
-    Flujo:
-    1. Extract: Obtener datos de archivos Excel
-    2. Transform: Validar y normalizar
-    3. Load: Persistir datos
+    Flujo según instructivo:
+      1. Extract: Obtener datos de MySQL y CSV
+      2. Transform: Validar y normalizar (merge MySQL + CSV)
+      3. Load: Persistir en orden: Instituciones → Sedes → Visitas
+    
+    Uso:
+        orchestrator = ETLOrchestrator(etl_run_id=1)
+        success = orchestrator.execute()
     """
     
     def __init__(self, etl_run_id: int, user_id: Optional[int] = None):
@@ -57,6 +74,11 @@ class ETLOrchestrator:
         self.dict_instituciones = {}
         self.dict_sedes = {}
         self.dict_instituciones_by_name = {}
+        self.dict_instituciones_by_uesvalle = {}  # Nuevo: mapeo uesvalle_ie_id → UUID
+        
+        # Sincronizador MySQL + CSV
+        self.sync_processor: Optional[MySQLCSVSyncProcessor] = None
+        self.etl_metrics: Optional[ETLMetrics] = None
     
     def execute(self, 
                 dry_run: bool = False,
@@ -146,7 +168,8 @@ class ETLOrchestrator:
                     try:
                         if etl_file.file_type == 'csv':
                             # Usar RobustCSVParser para manejar delimitadores correctamente
-                            df = RobustCSVParser.parse_csv(etl_file.file_path, delimiter=';', encoding='utf-8')
+                            # No pasar encoding fijo para permitir fallback automático
+                            df = RobustCSVParser.parse_csv(etl_file.file_path, delimiter=';')
                             
                             # Validar coordenadas
                             valid, invalid, samples = RobustCSVParser.validate_coordinates(
@@ -225,10 +248,16 @@ class ETLOrchestrator:
                     df_valid = Normalizer.normalize_coordinates(df_valid)
                     df_valid = Normalizer.normalize_dates(df_valid)
                     
-                    # Limpiar espacios en blanco en columnas de texto
+                    # Limpiar espacios en blanco en columnas de texto (con manejo seguro)
                     for col in df_valid.select_dtypes(include=['object']).columns:
-                        if df_valid[col].dtype == 'object':
-                            df_valid[col] = df_valid[col].str.strip()
+                        try:
+                            # Solo aplicar .str si realmente son strings
+                            if df_valid[col].dtype == 'object':
+                                df_valid[col] = df_valid[col].astype(str).str.strip()
+                                # Restaurar NaN donde había valores vacíos
+                                df_valid[col] = df_valid[col].replace(['nan', 'None', ''], pd.NA)
+                        except Exception:
+                            pass  # Ignorar columnas problemáticas
                             
                     # Normalización específica de columnas DANE (FASE 0)
                     # Buscar columnas que parezcan códigos DANE
@@ -272,102 +301,532 @@ class ETLOrchestrator:
             return False
     
     def _execute_loading(self, dry_run: bool = False) -> bool:
-        """Carga datos usando transformadores externos."""
+        """
+        Carga datos usando BULK OPERATIONS (optimizado para alto volumen).
+        
+        FLUJO SIMPLIFICADO:
+          1️⃣ Indexar CSV por CODIGODANE (para enriquecer con coordenadas)
+          2️⃣ Extraer TODA la data de MySQL en memoria
+          3️⃣ BULK crear/actualizar INSTITUCIONES (sin sedes)
+          4️⃣ BULK crear VISITAS
+          
+        NO SE USAN SEDES - cada fila MySQL = 1 institución + 1 visita
+        Coordenadas van directamente en la tabla institucion
+        """
         try:
             logger.info(f"Cargando datos a BD ({'DRY RUN' if dry_run else 'LIVE'})...")
-            self._load_dictionaries()
+            logger.info("🚀 Usando BULK OPERATIONS para alto rendimiento")
             
-            # Clasificar y ordenar archivos para asegurar orden correcto (Sedes antes que Visitas)
-            files_to_process = []
+            # Separar archivos por tipo
+            csv_files = []
+            mysql_files = []
+            
             for transformation in self.transformation_results:
-                filename = transformation['filename']
-                # Simple classification for sorting
-                priority = 99
-                if 'SEDE' in filename.upper() or 'SED' in filename.upper():
-                    priority = 1
-                elif 'VISITA' in filename.upper():
-                    priority = 2
-                
-                files_to_process.append({**transformation, 'priority': priority})
-            
-            files_to_process.sort(key=lambda x: x['priority'])
-            
-            for transformation in files_to_process:
                 df = transformation['df_transformed']
                 filename = transformation['filename']
-                file_id = transformation['file_id']
                 
-                logger.info(f"Procesando {filename}...")
+                if self._is_mysql_data(df) or 'MySQL' in filename:
+                    mysql_files.append(transformation)
+                    logger.info(f"  📊 MySQL data: {filename} ({len(df)} registros)")
+                else:
+                    csv_files.append(transformation)
+                    logger.info(f"  📄 CSV data: {filename} ({len(df)} registros)")
+            
+            # =========================================================
+            # PASO 1: Indexar CSV por CODIGODANE (para coordenadas)
+            # =========================================================
+            logger.info("\n" + "=" * 60)
+            logger.info("📋 PASO 1: Indexando CSV por CODIGODANE...")
+            logger.info("=" * 60)
+            
+            csv_by_dane = {}
+            for csv_data in csv_files:
+                df = csv_data['df_transformed'].copy()
+                # Normalizar nombres de columnas a mayúsculas
+                df.columns = [str(c).upper().strip() for c in df.columns]
                 
+                logger.debug(f"   Columnas CSV disponibles: {list(df.columns)[:10]}...")
+                
+                # Buscar columna de DANE (más flexible)
+                dane_col = None
+                for col in df.columns:
+                    col_upper = col.upper()
+                    if 'COD_DANE' in col_upper or col_upper == 'CODIGODANE' or col_upper == 'DANE' or 'CODIGO_DANE' in col_upper:
+                        dane_col = col
+                        logger.debug(f"   Columna DANE encontrada: {col}")
+                        break
+                
+                if dane_col:
+                    for _, row in df.iterrows():
+                        dane = str(row.get(dane_col, '')).strip()
+                        # Limpiar formato .0 de números convertidos a string
+                        if dane.endswith('.0'):
+                            dane = dane[:-2]
+                        if dane and dane.lower() not in ['nan', 'none', '', 'na']:
+                            csv_by_dane[dane] = row
+                else:
+                    logger.warning(f"   ⚠️ No se encontró columna DANE en CSV. Columnas: {list(df.columns)}")
+            
+            logger.info(f"✓ CSV indexado: {len(csv_by_dane)} registros por DANE")
+            
+            # =========================================================
+            # PASO 2: Extraer TODA la data de MySQL
+            # =========================================================
+            logger.info("\n" + "=" * 60)
+            logger.info("📊 PASO 2: Extrayendo datos de MySQL...")
+            logger.info("=" * 60)
+            
+            df_mysql = None
+            for mysql_data in mysql_files:
+                df_temp = mysql_data['df_transformed'].copy()
+                df_temp.columns = [str(c).lower().strip() for c in df_temp.columns]
+                if df_mysql is None:
+                    df_mysql = df_temp
+                else:
+                    df_mysql = pd.concat([df_mysql, df_temp], ignore_index=True)
+            
+            # Si no hay datos de MySQL en transformation_results, intentar extraer directamente
+            if (df_mysql is None or df_mysql.empty) and 'source_mysql' in settings.DATABASES:
+                logger.info("   Intentando extracción directa de MySQL...")
                 try:
-                    # ⭐ USA LAS FUNCIONES EXTERNAS
-                    if 'SEDE' in filename.upper() or 'SED' in filename.upper():
-                        from apps.etl.utils.data_transformers import transformar_maestras_csv
-                        
-                        # Transforma usando función externa
-                        df_inst, df_sedes, mapa = transformar_maestras_csv(df)
-                        
-                        # Inserta
-                        inst_count = self._insert_instituciones(df_inst)
-                        sedes_count = self._insert_sedes(df_sedes)
-                        
-                        logger.info(f"✓ Cargadas {inst_count} instituciones, {sedes_count} sedes")
-                        
-                        # Recarga diccionarios
-                        self._load_dictionaries()
-                        
-                        if file_id:
-                            ETLFile.objects.filter(id=file_id).update(
-                                status='completed',
-                                rows_processed=inst_count + sedes_count,
-                                processed_at=timezone.now()
-                            )
-                    
-                    elif 'VISITA' in filename.upper():
-                        from apps.etl.utils.data_transformers import transformar_visitas_mysql
-                        
-                        df_visitas = transformar_visitas_mysql(df, self.dict_sedes)
-                        visitas_count = self._insert_visitas(df_visitas)
-                        
-                        logger.info(f"✓ Cargadas {visitas_count} visitas")
-                        
-                        if file_id:
-                            ETLFile.objects.filter(id=file_id).update(
-                                status='completed',
-                                rows_processed=visitas_count,
-                                processed_at=timezone.now()
-                            )
-                
+                    conn = connections['source_mysql']
+                    if conn.connection is None:
+                        conn.connect()
+                    df_mysql = pd.read_sql("SELECT * FROM visitas_instituciones_educativos", conn.connection)
+                    df_mysql.columns = [str(c).lower().strip() for c in df_mysql.columns]
+                    logger.info(f"   ✓ MySQL directo: {len(df_mysql)} registros")
                 except Exception as e:
-                    logger.error(f"Error cargando {filename}: {str(e)}")
-                    if file_id:
-                        ETLFile.objects.filter(id=file_id).update(
-                            status='failed',
-                            error_message=str(e)
-                        )
+                    logger.error(f"   ❌ Error extracción directa MySQL: {e}")
+            
+            if df_mysql is None or df_mysql.empty:
+                logger.warning("⚠️ No hay datos de MySQL para procesar")
+                return True
+            
+            logger.info(f"✓ MySQL: {len(df_mysql)} registros totales")
+            
+            # =========================================================
+            # PASO 3: BULK crear/actualizar INSTITUCIONES
+            # =========================================================
+            logger.info("\n" + "=" * 60)
+            logger.info("🏫 PASO 3: BULK creando instituciones...")
+            logger.info("=" * 60)
+            
+            inst_created, inst_updated = self._bulk_create_instituciones(df_mysql, csv_by_dane)
+            
+            logger.info(f"✓ Instituciones: {inst_created} creadas, {inst_updated} actualizadas")
+            
+            # =========================================================
+            # PASO 4: BULK crear VISITAS
+            # =========================================================
+            logger.info("\n" + "=" * 60)
+            logger.info("📝 PASO 4: BULK creando visitas...")
+            logger.info("=" * 60)
+            
+            visitas_created, visitas_updated = self._bulk_create_visitas(df_mysql)
+            
+            logger.info(f"✓ Visitas: {visitas_created} creadas, {visitas_updated} actualizadas")
+            
+            # =========================================================
+            # RESUMEN FINAL
+            # =========================================================
+            logger.info("\n" + "=" * 60)
+            logger.info("📊 RESUMEN ETL COMPLETADO (BULK)")
+            logger.info("=" * 60)
+            logger.info(f"   Instituciones creadas: {inst_created}")
+            logger.info(f"   Instituciones actualizadas: {inst_updated}")
+            logger.info(f"   Visitas creadas: {visitas_created}")
+            logger.info(f"   Visitas actualizadas: {visitas_updated}")
+            logger.info("=" * 60)
+            
+            # Actualizar archivos ETL
+            for transformation in self.transformation_results:
+                file_id = transformation.get('file_id')
+                if file_id:
+                    ETLFile.objects.filter(id=file_id).update(
+                        status='completed',
+                        processed_at=timezone.now()
+                    )
             
             return True
         
         except Exception as e:
-            logger.error(f"Error en carga: {str(e)}")
+            logger.error(f"Error en carga BULK: {str(e)}", exc_info=True)
             return False
+    
+    def _bulk_create_instituciones(self, df_mysql: pd.DataFrame, csv_by_dane: dict) -> tuple:
+        """
+        BULK crear/actualizar instituciones desde MySQL + enriquecer con CSV.
+        
+        Returns:
+            (created_count, updated_count)
+        """
+        BATCH_SIZE = 500
+        
+        # 1. Obtener instituciones únicas de MySQL
+        if 'identificacion' not in df_mysql.columns:
+            logger.warning("No hay columna 'identificacion' en MySQL")
+            return (0, 0)
+        
+        df_unique = df_mysql.drop_duplicates(subset=['identificacion'])
+        logger.info(f"   Instituciones únicas a procesar: {len(df_unique)}")
+        
+        # 2. Cargar instituciones existentes en memoria (por uesvalle_ie_id y dane_ie_id)
+        existing_by_uesvalle = {
+            inst.uesvalle_ie_id: inst 
+            for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False)
+        }
+        existing_by_dane = {
+            inst.dane_ie_id: inst 
+            for inst in Institucion.objects.filter(dane_ie_id__isnull=False)
+        }
+        
+        logger.info(f"   Existentes: {len(existing_by_uesvalle)} por UESValle, {len(existing_by_dane)} por DANE")
+        
+        # Log columns for debugging
+        logger.info(f"   Columnas disponibles en MySQL: {list(df_mysql.columns)}")
+
+        to_create = []
+        to_update = []
+        
+        for _, row in df_unique.iterrows():
+            uesvalle_id = str(row.get('identificacion', '')).strip()
+            if not uesvalle_id or uesvalle_id.lower() in ['nan', 'none', '']:
+                continue
+            
+            # Obtener codigodane
+            codigodane = None
+            if 'codigodane' in row.index and pd.notna(row.get('codigodane')):
+                codigodane = str(row['codigodane']).strip()
+                if codigodane.lower() in ['nan', 'none', '']:
+                    codigodane = None
+            
+            # Buscar nombre
+            nombre = None
+            # Prioridad según esquema MySQL: nombreestablecimiento
+            for col in ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial', 'establecimiento', 'institucion']:
+                if col in row.index and pd.notna(row.get(col)):
+                    nombre = str(row[col]).strip()
+                    break
+            if not nombre:
+                nombre = f"Institución {uesvalle_id}"
+            
+            # Buscar coordenadas en CSV (por DANE)
+            lat, lon = None, None
+            if codigodane and codigodane in csv_by_dane:
+                csv_row = csv_by_dane[codigodane]
+                # Buscar columnas de coordenadas
+                for lat_col in ['LATITUD', 'LAT', 'LATITUDE']:
+                    if lat_col in csv_row.index:
+                        lat = self._parse_coordinate(csv_row.get(lat_col))
+                        break
+                for lon_col in ['LONGITUD', 'LON', 'LONGITUDE', 'LNG']:
+                    if lon_col in csv_row.index:
+                        lon = self._parse_coordinate(csv_row.get(lon_col))
+                        break
+            
+            # Verificar si existe
+            existing = existing_by_uesvalle.get(uesvalle_id)
+            if not existing and codigodane:
+                existing = existing_by_dane.get(codigodane)
+            
+            if existing:
+                # Actualizar
+                existing.nombre = nombre
+                existing.uesvalle_ie_id = uesvalle_id
+                if codigodane:
+                    existing.dane_ie_id = codigodane
+                if lat is not None:
+                    existing.lat = lat
+                if lon is not None:
+                    existing.lon = lon
+                existing.estado = 'ACTIVA'
+                existing.metadata = {'origen': 'mysql+csv', 'fecha_sync': timezone.now().isoformat()}
+                to_update.append(existing)
+            else:
+                # Crear nueva
+                to_create.append(Institucion(
+                    id=uuid.uuid4(),
+                    nombre=nombre,
+                    uesvalle_ie_id=uesvalle_id,
+                    dane_ie_id=codigodane,
+                    lat=lat,
+                    lon=lon,
+                    estado='ACTIVA',
+                    metadata={'origen': 'mysql+csv', 'fecha_sync': timezone.now().isoformat()}
+                ))
+        
+        # 3. Ejecutar BULK operations
+        created_count = 0
+        updated_count = 0
+        
+        # BULK CREATE
+        if to_create:
+            for i in range(0, len(to_create), BATCH_SIZE):
+                batch = to_create[i:i+BATCH_SIZE]
+                Institucion.objects.bulk_create(batch, ignore_conflicts=True)
+                created_count += len(batch)
+                logger.info(f"   Batch {i//BATCH_SIZE + 1}: {len(batch)} instituciones creadas")
+        
+        # BULK UPDATE
+        if to_update:
+            for i in range(0, len(to_update), BATCH_SIZE):
+                batch = to_update[i:i+BATCH_SIZE]
+                Institucion.objects.bulk_update(
+                    batch, 
+                    ['nombre', 'uesvalle_ie_id', 'dane_ie_id', 'lat', 'lon', 'estado', 'metadata'],
+                    batch_size=BATCH_SIZE
+                )
+                updated_count += len(batch)
+                logger.info(f"   Batch {i//BATCH_SIZE + 1}: {len(batch)} instituciones actualizadas")
+        
+        return (created_count, updated_count)
+    
+    def _bulk_create_visitas(self, df_mysql: pd.DataFrame) -> tuple:
+        """
+        BULK crear/actualizar visitas desde MySQL.
+        
+        Returns:
+            (created_count, updated_count)
+        """
+        BATCH_SIZE = 500
+        
+        # 1. Recargar diccionario de instituciones
+        inst_by_uesvalle = {
+            inst.uesvalle_ie_id: inst.id 
+            for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False)
+        }
+        
+        logger.info(f"   Instituciones disponibles: {len(inst_by_uesvalle)}")
+        
+        # 2. Cargar visitas existentes (por clave única: institucion + fecha + programa)
+        existing_visitas = {}
+        for v in Visita.objects.all().values('id', 'institucion_id', 'fechavisita', 'programa'):
+            key = (str(v['institucion_id']), str(v['fechavisita']), v['programa'] or '')
+            existing_visitas[key] = v['id']
+        
+        logger.info(f"   Visitas existentes: {len(existing_visitas)}")
+        
+        to_create = []
+        to_update = []
+        skipped = 0
+        
+        for _, row in df_mysql.iterrows():
+            # Obtener institucion_id
+            uesvalle_id = str(row.get('identificacion', '')).strip()
+            if not uesvalle_id or uesvalle_id.lower() in ['nan', 'none', '']:
+                skipped += 1
+                continue
+            
+            institucion_id = inst_by_uesvalle.get(uesvalle_id)
+            if not institucion_id:
+                skipped += 1
+                continue
+            
+            # Obtener fecha
+            fechavisita = row.get('fechavisita')
+            if pd.isna(fechavisita) or not fechavisita:
+                skipped += 1
+                continue
+            
+            # Programa
+            programa = str(row.get('programa', '')).strip() if pd.notna(row.get('programa')) else ''
+            
+            # Clave única
+            key = (str(institucion_id), str(fechavisita), programa)
+            
+            # Metadata
+            meta = {}
+            # Campos adicionales del esquema MySQL
+            meta_cols = [
+                'codigodane', 'codigodanesede', 'nombrefuncionario', 'apellidofuncionario',
+                'direccionestablecimiento', 'telefonoestablecimiento', 'celular',
+                'codigoactividad', 'idactividad', 'codigocomuna', 'nombrecomuna', 'codigomunicipio', 'nombremunicipio',
+                'nombrecorregimiento', 'codigocorregimiento', 'nombrerepresentante', 'apellidorepresentante',
+                'codigoaro', 'nombrearo', 'numeropiscinas', 'nombrebarrio', 'ideisobjetosprogramatico',
+                'numeromanualacta', 'plazo', 'cumplimiento', 'tienepae', 'estudianteshombre', 'estudiantesmujer',
+                'numerosdocente', 'totaltrabajador', 'fecha_cargue', 'tipocontrato', 'nombreusuario'
+            ]
+            for col in meta_cols:
+                if col in row.index and pd.notna(row.get(col)):
+                    meta[col] = str(row[col])
+            
+            # Convertir campos de tipo INT de forma segura
+            codigofuncionario = None
+            codigotipoobjeto = None
+            
+            # Concepto visita (Sanitizar para cumplir CHECK constraint)
+            conceptovisita = row.get('conceptovisita')
+            if pd.notna(conceptovisita):
+                conceptovisita = str(conceptovisita).strip().upper()
+                if conceptovisita not in ['F', 'D', 'FCR']:
+                    # Si no es válido, intentar mapear o dejar en None
+                    # 'SC' -> Sin Concepto -> None
+                    conceptovisita = None
+            else:
+                conceptovisita = None
+            
+            # Parsear codigofuncionario
+            if pd.notna(row.get('codigofuncionario')):
+                try:
+                    val = row.get('codigofuncionario')
+                    # Si es float, convertir a int
+                    if isinstance(val, float):
+                        val = int(val)
+                    elif isinstance(val, str):
+                        val = int(float(val))  # Manejar "123.0"
+                    # Validar que esté dentro del rango de INT
+                    if -2147483648 <= val <= 2147483647:
+                        codigofuncionario = val
+                except (ValueError, TypeError, OverflowError):
+                    codigofuncionario = None
+            
+            # Parsear codigotipoobjeto
+            if pd.notna(row.get('codigotipoobjeto')):
+                try:
+                    val = row.get('codigotipoobjeto')
+                    if isinstance(val, float):
+                        val = int(val)
+                    elif isinstance(val, str):
+                        val = int(float(val))
+                    if -2147483648 <= val <= 2147483647:
+                        codigotipoobjeto = val
+                except (ValueError, TypeError, OverflowError):
+                    codigotipoobjeto = None
+            
+            if key in existing_visitas:
+                # Si el ID es None, significa que se agregó a to_create en este mismo loop
+                if existing_visitas[key] is None:
+                    continue
+
+                # Actualizar existente
+                visita = Visita(
+                    id=existing_visitas[key],
+                    institucion_id=institucion_id,
+                    fechavisita=fechavisita,
+                    programa=programa,
+                    nombreactividad=row.get('nombreactividad') if pd.notna(row.get('nombreactividad')) else None,
+                    codigotipoobjeto=codigotipoobjeto,
+                    nombretipoobjeto=row.get('nombretipoobjeto') if pd.notna(row.get('nombretipoobjeto')) else None,
+                    conceptovisita=conceptovisita,
+                    requerimientos=row.get('requerimientos') if pd.notna(row.get('requerimientos')) else None,
+                    motivovisita=row.get('motivovisita') if pd.notna(row.get('motivovisita')) else None,
+                    nombrefuncionario=row.get('nombrefuncionario') if pd.notna(row.get('nombrefuncionario')) else None,
+                    apellidofuncionario=row.get('apellidofuncionario') if pd.notna(row.get('apellidofuncionario')) else None,
+                    codigofuncionario=codigofuncionario,
+                    resultado=row.get('resultado') if pd.notna(row.get('resultado')) else (str(row.get('cumplimiento')) if pd.notna(row.get('cumplimiento')) else None),
+                    observacion=row.get('observacion') if pd.notna(row.get('observacion')) else None,
+                    metadata=meta
+                )
+                to_update.append(visita)
+            else:
+                # Crear nueva
+                to_create.append(Visita(
+                    # id=uuid.uuid4(),  # REMOVED: Let DB handle BigAutoField
+                    institucion_id=institucion_id,
+                    fechavisita=fechavisita,
+                    programa=programa,
+                    nombreactividad=row.get('nombreactividad') if pd.notna(row.get('nombreactividad')) else None,
+                    codigotipoobjeto=codigotipoobjeto,
+                    nombretipoobjeto=row.get('nombretipoobjeto') if pd.notna(row.get('nombretipoobjeto')) else None,
+                    conceptovisita=conceptovisita,
+                    requerimientos=row.get('requerimientos') if pd.notna(row.get('requerimientos')) else None,
+                    motivovisita=row.get('motivovisita') if pd.notna(row.get('motivovisita')) else None,
+                    nombrefuncionario=row.get('nombrefuncionario') if pd.notna(row.get('nombrefuncionario')) else None,
+                    apellidofuncionario=row.get('apellidofuncionario') if pd.notna(row.get('apellidofuncionario')) else None,
+                    codigofuncionario=codigofuncionario,
+                    resultado=row.get('resultado') if pd.notna(row.get('resultado')) else (str(row.get('cumplimiento')) if pd.notna(row.get('cumplimiento')) else None),
+                    observacion=row.get('observacion') if pd.notna(row.get('observacion')) else None,
+                    metadata=meta
+                ))
+                # Agregar al índice para evitar duplicados en el mismo batch
+                existing_visitas[key] = None
+        
+        logger.info(f"   Saltadas (sin institución o fecha): {skipped}")
+        
+        # 3. Ejecutar BULK operations
+        created_count = 0
+        updated_count = 0
+        
+        # BULK CREATE
+        if to_create:
+            for i in range(0, len(to_create), BATCH_SIZE):
+                batch = to_create[i:i+BATCH_SIZE]
+                Visita.objects.bulk_create(batch, ignore_conflicts=True)
+                created_count += len(batch)
+                logger.info(f"   Batch {i//BATCH_SIZE + 1}: {len(batch)} visitas creadas")
+        
+        # BULK UPDATE
+        if to_update:
+            for i in range(0, len(to_update), BATCH_SIZE):
+                batch = to_update[i:i+BATCH_SIZE]
+                Visita.objects.bulk_update(
+                    batch,
+                    ['nombreactividad', 'codigotipoobjeto', 'nombretipoobjeto', 'conceptovisita', 
+                     'requerimientos', 'motivovisita', 'nombrefuncionario', 'apellidofuncionario', 
+                     'codigofuncionario', 'resultado', 'observacion', 'metadata'],
+                    batch_size=BATCH_SIZE
+                )
+                updated_count += len(batch)
+                logger.info(f"   Batch {i//BATCH_SIZE + 1}: {len(batch)} visitas actualizadas")
+        
+        return (created_count, updated_count)
+    
+    def _parse_coordinate(self, val) -> float:
+        """Parsea un valor de coordenada a float."""
+        if val is None or pd.isna(val):
+            return None
+        try:
+            # Manejar formato con coma decimal
+            if isinstance(val, str):
+                val = val.replace(',', '.').strip()
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+    
+    def _is_mysql_data(self, df: pd.DataFrame) -> bool:
+        """Detecta si el DataFrame viene de MySQL (tiene columnas características de visitas)."""
+        cols_lower = [c.lower() for c in df.columns]
+        mysql_indicators = ['identificacion', 'fechavisita', 'conceptovisita', 'codigofuncionario']
+        return any(ind in cols_lower for ind in mysql_indicators)
 
 
     def _load_dictionaries(self):
-        """Carga diccionarios de mapeo DANE -> UUID."""
+        """
+        Carga diccionarios de mapeo para sincronización MySQL + CSV.
+        
+        Diccionarios cargados:
+          - dict_instituciones: dane_ie_id → UUID
+          - dict_instituciones_by_uesvalle: uesvalle_ie_id → UUID
+          - dict_sedes: dane_sede_id → UUID
+          - dict_instituciones_by_name: nombre → UUID
+        """
+        # Por DANE (fuente CSV)
         self.dict_instituciones = {
             inst.dane_ie_id: str(inst.id) 
             for inst in Institucion.objects.filter(dane_ie_id__isnull=False)
         }
+        
+        # Por uesvalle_ie_id (fuente MySQL - identificacion)
+        self.dict_instituciones_by_uesvalle = {
+            inst.uesvalle_ie_id: str(inst.id) 
+            for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False)
+        }
+        
+        # Sedes por DANE
         self.dict_sedes = {
             sede.dane_sede_id: str(sede.id) 
             for sede in Sede.objects.filter(dane_sede_id__isnull=False)
         }
+        
+        # Instituciones por nombre (fallback)
         self.dict_instituciones_by_name = {
             inst.nombre: str(inst.id) 
             for inst in Institucion.objects.all()
         }
-        logger.info(f"Diccionarios cargados: {len(self.dict_instituciones)} IEs, {len(self.dict_sedes)} Sedes")
+        
+        logger.info(f"📚 Diccionarios cargados: {len(self.dict_instituciones)} IEs (DANE), "
+                   f"{len(self.dict_instituciones_by_uesvalle)} IEs (UESValle), "
+                   f"{len(self.dict_sedes)} Sedes")
 
     def _classify_file_content(self, df: pd.DataFrame, filename: str = '') -> str:
         """Clasifica el tipo de archivo basado en contenido y nombre."""
@@ -404,8 +863,46 @@ class ETLOrchestrator:
         return 0
 
     def _process_visitas(self, df: pd.DataFrame) -> int:
-        """Paso 2.1: Cargar Visitas (MySQL)."""
-        logger.info(f"Procesando Visitas (Normalizando {len(df)} registros contra {len(self.dict_sedes)} sedes)...")
+        """
+        Procesa Visitas desde MySQL con nueva lógica de sincronización.
+        
+        Implementa FASE 4 del instructivo:
+        - institucion_id OBLIGATORIO
+        - sede_id OPCIONAL (puede ser NULL)
+        - Búsqueda por: 1) codigodane, 2) identificacion (uesvalle_ie_id)
+        """
+        logger.info(f"📋 Procesando Visitas (Normalizando {len(df)} registros)...")
+        logger.info(f"   Instituciones disponibles: {len(self.dict_instituciones)} (DANE), "
+                   f"{len(self.dict_instituciones_by_uesvalle)} (UESValle)")
+        logger.info(f"   Sedes disponibles: {len(self.dict_sedes)}")
+        
+        if len(df) == 0:
+            logger.warning("⚠️ No hay registros de visitas para procesar")
+            return 0
+        
+        # Usar transformar_visitas_mysql con diccionarios de instituciones
+        from apps.etl.utils.data_transformers import transformar_visitas_mysql
+        
+        df_visitas = transformar_visitas_mysql(
+            df,
+            self.dict_sedes,
+            dict_instituciones_by_dane=self.dict_instituciones,
+            dict_instituciones_by_uesvalle=self.dict_instituciones_by_uesvalle
+        )
+        
+        if df_visitas.empty:
+            logger.warning("⚠️ No se pudieron procesar visitas (DataFrame vacío)")
+            return 0
+        
+        # Insertar visitas procesadas
+        return self._insert_visitas(df_visitas)
+    
+    def _process_visitas_legacy(self, df: pd.DataFrame) -> int:
+        """
+        DEPRECATED: Método legacy para procesar visitas.
+        Usar _process_visitas() con la nueva lógica.
+        """
+        logger.warning("⚠️ Usando método legacy _process_visitas_legacy - considerar migrar a _process_visitas")
         
         if len(df) == 0:
             logger.warning("No hay registros de visitas para procesar")
@@ -569,13 +1066,22 @@ class ETLOrchestrator:
     def _extract_from_mysql_db(self):
         """Intenta extraer datos directamente de la BD MySQL configurada."""
         try:
-            logger.info("Intentando extraer datos directamente de MySQL (source_mysql)...")
+            logger.info("=" * 60)
+            logger.info("🔌 Intentando extraer datos directamente de MySQL...")
+            logger.info("=" * 60)
             
-            if 'source_mysql' not in connections:
-                logger.warning("Conexión 'source_mysql' no configurada")
+            # Verificar configuración
+            logger.info(f"   Databases configuradas: {list(settings.DATABASES.keys())}")
+            
+            if 'source_mysql' not in settings.DATABASES:
+                logger.warning("❌ 'source_mysql' no está en settings.DATABASES")
                 return
             
+            logger.info("   ✓ source_mysql está configurado en settings")
+            
+            # Obtener conexión
             conn = connections['source_mysql']
+            logger.info(f"   Conexión obtenida: {conn}")
             
             # 1. Buscar tabla candidata
             # Prioridad 1: Tabla específica solicitada por usuario
@@ -695,290 +1201,92 @@ class ETLOrchestrator:
         return count
 
     def _insert_visitas(self, df_clean: pd.DataFrame) -> int:
-        """Inserta Dataframe limpio en tabla Visita."""
+        """
+        Inserta Dataframe limpio en tabla Visita.
+        
+        Campos del modelo actualizado:
+          - institucion_id (OBLIGATORIO)
+          - sede_id (OPCIONAL)
+          - fechavisita (OBLIGATORIO)
+          - nombreactividad, codigotipoobjeto, nombretipoobjeto
+          - conceptovisita (F/D/FCR)
+          - requerimientos, motivovisita
+          - nombrefuncionario, apellidofuncionario, codigofuncionario
+          - programa, resultado, observacion
+          - metadata
+        """
+        if df_clean.empty:
+            logger.warning("DataFrame de visitas vacío")
+            return 0
+        
         count = 0
-        objs = []
+        count_creadas = 0
+        count_actualizadas = 0
+        count_fallidas = 0
+        
         for _, row in df_clean.iterrows():
             try:
-                if not row['sede_id']: continue # Saltar huérfanas
+                # institucion_id es OBLIGATORIO
+                institucion_id = row.get('institucion_id')
+                if not institucion_id:
+                    logger.debug(f"Visita sin institucion_id, saltando")
+                    count_fallidas += 1
+                    continue
                 
-                meta = json.loads(row['metadata']) if isinstance(row['metadata'], str) else {}
+                # fechavisita es OBLIGATORIO
+                fechavisita = row.get('fechavisita')
+                if not fechavisita:
+                    logger.debug(f"Visita sin fechavisita, saltando")
+                    count_fallidas += 1
+                    continue
                 
-                objs.append(Visita(
-                    sede_id=row['sede_id'],
-                    fecha=row['fecha'],
-                    resultado=row['resultado'],
-                    observaciones=row['observaciones'],
-                    metadata=meta
-                ))
-            except Exception:
+                # sede_id es OPCIONAL
+                sede_id = row.get('sede_id') or None
+                
+                # Programa para índice único
+                programa = row.get('programa') or ''
+                
+                # Metadata
+                meta = row.get('metadata', {})
+                if isinstance(meta, str):
+                    try:
+                        meta = json.loads(meta)
+                    except:
+                        meta = {}
+                
+                # Usar update_or_create para manejar duplicados según índice único
+                # (sede_id, fechavisita, programa)
+                obj, created = Visita.objects.update_or_create(
+                    sede_id=sede_id,
+                    fechavisita=fechavisita,
+                    programa=programa,
+                    defaults={
+                        'institucion_id': institucion_id,
+                        'nombreactividad': row.get('nombreactividad'),
+                        'codigotipoobjeto': row.get('codigotipoobjeto'),
+                        'nombretipoobjeto': row.get('nombretipoobjeto'),
+                        'conceptovisita': row.get('conceptovisita'),
+                        'requerimientos': row.get('requerimientos'),
+                        'motivovisita': row.get('motivovisita'),
+                        'nombrefuncionario': row.get('nombrefuncionario'),
+                        'apellidofuncionario': row.get('apellidofuncionario'),
+                        'codigofuncionario': row.get('codigofuncionario'),
+                        'resultado': row.get('resultado'),
+                        'observacion': row.get('observacion'),
+                        'metadata': meta
+                    }
+                )
+                
+                if created:
+                    count_creadas += 1
+                else:
+                    count_actualizadas += 1
+                count += 1
+                
+            except Exception as e:
+                logger.warning(f"Error insertando visita: {e}")
+                count_fallidas += 1
                 continue
         
-        # Bulk create es más rápido para visitas (son muchas)
-        if objs:
-            Visita.objects.bulk_create(objs, batch_size=500, ignore_conflicts=True)
-            count = len(objs)
+        logger.info(f"✓ Visitas: {count_creadas} creadas, {count_actualizadas} actualizadas, {count_fallidas} fallidas")
         return count
-    
-    def process_csv_data(self, df: pd.DataFrame, etl_file) -> tuple:
-        """
-        Procesa y carga datos CSV con validación de departamento.
-        
-        Returns:
-            tuple: (procesados, removidos)
-        """
-        logger.info("=" * 60)
-        logger.info("📋 PROCESANDO CSV")
-        logger.info("=" * 60)
-        
-        try:
-            # ⭐ PRIMERO: Normaliza nombres de columna
-            logger.info("🧹 Normalizando nombres de columnas...")
-            df.columns = [col.strip().upper() for col in df.columns]
-            logger.debug(f"Columnas normalizadas: {df.columns.tolist()}")
-            
-            # ⭐ PASO 1: Validar departamento
-            logger.info("🔍 Paso 1: Validando departamento...")
-            
-            # Detecta la columna de departamento (puede tener varios nombres)
-            department_col = None
-            for possible_name in ['DEPARTAMENTO', 'DEPT', 'DEPARTMENT', 'ID_DEPARTAMENTO']:
-                if possible_name in df.columns:
-                    department_col = possible_name
-                    break
-            
-            if not department_col:
-                logger.error("❌ No se encontró columna de departamento en CSV")
-                raise ValueError("Columna DEPARTAMENTO no encontrada en CSV")
-            
-            initial_rows = len(df)
-            df, removed, kept = DepartmentValidator.filter_dataframe(df, department_col)
-            
-            logger.info(f"✓ Departamento validado:")
-            logger.info(f"  • Filas iniciales: {initial_rows}")
-            logger.info(f"  • Filas del Valle del Cauca: {kept}")
-            logger.info(f"  • Filas eliminadas: {removed}")
-            
-            if kept == 0:
-                logger.warning("⚠️ ADVERTENCIA: No hay registros del Valle del Cauca en el archivo")
-                return 0, initial_rows
-            
-            # ⭐ PASO 2: Normalizar y renombrar columnas
-            logger.info("🔄 Paso 2: Normalizando columnas...")
-            
-            column_mapping = {
-                'COD_DANE': 'codigo_dane_ie',
-                'CODIGO_DANE_IE': 'codigo_dane_ie',
-                'DANE_IE': 'codigo_dane_ie',
-                'NOMBRE_INSTITUCION': 'nombre_institucion',
-                'NOMBRE': 'nombre_institucion',
-                'CORREO_INSTITUCIONAL': 'email',
-                'CORREO': 'email',
-                'EMAIL': 'email',
-                'COD_SEDE_PRINCIPAL': 'codigo_dane_sede',
-                'CODIGO_DANE_SEDE': 'codigo_dane_sede',
-                'DANE_SEDE': 'codigo_dane_sede',
-                'SEDE_PRINCIPAL': 'nombre_sede',
-                'SEDE': 'nombre_sede',
-                'DIRECCION': 'direccion',
-                'DIR': 'direccion',
-                'LATITUD': 'latitud',
-                'LAT': 'latitud',
-                'LONGITUD': 'longitud',
-                'LON': 'longitud',
-                'JORNADA': 'jornada',
-                'ZONA': 'zona',
-                'ESTADO': 'estado',
-                'ID_MUNICIPIO': 'codigo_municipio',
-                'CODIGO_MUNICIPIO': 'codigo_municipio',
-                'MUNICIPIO': 'municipio',
-                'TELEFONO': 'telefono',
-                'TEL': 'telefono',
-                department_col: 'nombre_departamento'
-            }
-            
-            existing_mapping = {old: new for old, new in column_mapping.items() if old in df.columns}
-            df = df.rename(columns=existing_mapping)
-            logger.info(f"✓ {len(existing_mapping)} columnas normalizadas")
-            logger.debug(f"Mapeo realizado: {existing_mapping}")
-            logger.debug(f"Columnas finales: {df.columns.tolist()}")
-            
-            # ⭐ PASO 3: Cargar instituciones
-            logger.info("📥 Paso 3: Cargando instituciones...")
-            instituciones_cargadas = self._process_instituciones(df)
-            
-            # ⭐ PASO 4: Cargar sedes
-            logger.info("📥 Paso 4: Cargando sedes...")
-            sedes_cargadas = self._process_sedes(df)
-            
-            total_cargados = instituciones_cargadas + sedes_cargadas
-            
-            logger.info("=" * 60)
-            logger.info(f"✅ CSV procesado correctamente")
-            logger.info(f"  • Instituciones cargadas: {instituciones_cargadas}")
-            logger.info(f"  • Sedes cargadas: {sedes_cargadas}")
-            logger.info(f"  • Total: {total_cargados}")
-            logger.info("=" * 60)
-            
-            return total_cargados, removed
-        
-        except Exception as e:
-            logger.error(f"❌ Error procesando CSV: {str(e)}")
-            raise
-    
-    def _process_instituciones(self, df: pd.DataFrame) -> int:
-        """Procesa y carga instituciones (solo Valle del Cauca)."""
-        logger.info("Procesando instituciones...")
-        instituciones_cargadas = 0
-        instituciones_fallidas = 0
-        
-        try:
-            # Verificar que la columna existe
-            if 'codigo_dane_ie' not in df.columns:
-                logger.error(f"❌ Columna 'codigo_dane_ie' no encontrada. Disponibles: {df.columns.tolist()}")
-                return 0
-            
-            # Deduplica por DANE
-            unique_inst = df.drop_duplicates(subset=['codigo_dane_ie'])
-            
-            for _, row in unique_inst.iterrows():
-                try:
-                    # Validación 1: confirma que es Valle del Cauca
-                    if not DepartmentValidator.is_valle_cauca(
-                        row.get('nombre_departamento', ''),
-                        row.get('codigo_departamento')
-                    ):
-                        logger.debug(f"  Institución descartada (no es Valle del Cauca): {row.get('nombre_institucion')}")
-                        instituciones_fallidas += 1
-                        continue
-                    
-                    # Validación 2: Verifica código de municipio (primeros 2 dígitos deben ser 76 para Valle del Cauca)
-                    codigo_municipio = str(row.get('codigo_municipio', '')).strip()
-                    if codigo_municipio and len(codigo_municipio) >= 2:
-                        codigo_depto = codigo_municipio[:2]
-                        if codigo_depto != '76':
-                            logger.debug(f"  Institución descartada (municipio {codigo_municipio} no es del Valle del Cauca): {row.get('nombre_institucion')}")
-                            instituciones_fallidas += 1
-                            continue
-                    
-                    # Crea la institución
-                    institucion_obj, created = Institucion.objects.update_or_create(
-                        dane_ie_id=str(row.get('codigo_dane_ie', '')).strip(),
-                        defaults={
-                            'nombre': str(row.get('nombre_institucion', '')).strip(),
-                            'codigo_municipio': codigo_municipio,
-                            'direccion': str(row.get('direccion', '')).strip() if row.get('direccion') else None,
-                            'telefono': str(row.get('telefono', '')).strip() if row.get('telefono') else None,
-                            'email': str(row.get('email', '')).strip() if row.get('email') else None,
-                            'estado': str(row.get('estado', 'A')).strip(),
-                            'metadata': {
-                                'origen': 'master_csv',
-                                'departamento': str(row.get('nombre_departamento', '')).strip(),
-                                'municipio': str(row.get('municipio', '')).strip() if row.get('municipio') else None
-                            }
-                        }
-                    )
-                    
-                    instituciones_cargadas += 1
-                    action = "creada" if created else "actualizada"
-                    logger.debug(f"  ✓ Institución {action}: {row.get('nombre_institucion')}")
-                
-                except Exception as e:
-                    logger.error(f"  ❌ Error cargando institución {row.get('codigo_dane_ie')}: {str(e)}")
-                    instituciones_fallidas += 1
-                    continue
-            
-            logger.info(f"✓ Instituciones: {instituciones_cargadas} cargadas, {instituciones_fallidas} errores")
-            return instituciones_cargadas
-        
-        except Exception as e:
-            logger.error(f"Error procesando instituciones: {str(e)}")
-            return 0
-    
-    def _process_sedes(self, df: pd.DataFrame) -> int:
-        """Procesa y carga sedes (solo del Valle del Cauca)."""
-        logger.info("Procesando sedes...")
-        sedes_cargadas = 0
-        sedes_fallidas = 0
-        
-        try:
-            # Obtén instituciones disponibles
-            instituciones_dict = {ie.nombre.upper(): ie for ie in Institucion.objects.all()}
-            
-            if 'codigo_dane_sede' not in df.columns:
-                logger.error(f"❌ Columna 'codigo_dane_sede' no encontrada. Disponibles: {df.columns.tolist()}")
-                return 0
-            
-            # Deduplica por DANE sede
-            unique_sedes = df.drop_duplicates(subset=['codigo_dane_sede'])
-            
-            for _, row in unique_sedes.iterrows():
-                try:
-                    # Validación 1: confirma que es Valle del Cauca
-                    if not DepartmentValidator.is_valle_cauca(
-                        row.get('nombre_departamento', ''),
-                        row.get('codigo_departamento')
-                    ):
-                        logger.debug(f"  Sede descartada (no es Valle del Cauca): {row.get('nombre_sede')}")
-                        sedes_fallidas += 1
-                        continue
-                    
-                    # Validación 2: Verifica código de municipio
-                    codigo_municipio = str(row.get('codigo_municipio', '')).strip()
-                    if codigo_municipio and len(codigo_municipio) >= 2:
-                        codigo_depto = codigo_municipio[:2]
-                        if codigo_depto != '76':
-                            logger.debug(f"  Sede descartada (municipio {codigo_municipio} no es del Valle del Cauca): {row.get('nombre_sede')}")
-                            sedes_fallidas += 1
-                            continue
-                    
-                    institucion_nombre = str(row.get('nombre_institucion', '')).strip().upper()
-                    institucion = instituciones_dict.get(institucion_nombre)
-                    
-                    if not institucion:
-                        logger.debug(f"  Sede descartada (institución no encontrada): {row.get('nombre_sede')}")
-                        sedes_fallidas += 1
-                        continue
-                    
-                    # Convierte coordenadas
-                    try:
-                        lat = float(str(row.get('latitud', '')).replace(',', '.')) if row.get('latitud') else None
-                        lon = float(str(row.get('longitud', '')).replace(',', '.')) if row.get('longitud') else None
-                    except:
-                        lat, lon = None, None
-                    
-                    sede_obj, created = Sede.objects.update_or_create(
-                        dane_sede_id=str(row.get('codigo_dane_sede', '')).strip(),
-                        defaults={
-                            'institucion_id': institucion.id,
-                            'nombre': str(row.get('nombre_sede', '')).strip(),
-                            'codigo_municipio': codigo_municipio,
-                            'direccion': str(row.get('direccion', '')).strip() if row.get('direccion') else None,
-                            'lat': lat,
-                            'lon': lon,
-                            'estado': str(row.get('estado', 'A')).strip(),
-                            'metadata': {
-                                'origen': 'master_csv',
-                                'jornada': str(row.get('jornada', '')).strip() if row.get('jornada') else '',
-                                'zona': str(row.get('zona', '')).strip() if row.get('zona') else '',
-                                'departamento': str(row.get('nombre_departamento', '')).strip()
-                            }
-                        }
-                    )
-                    
-                    sedes_cargadas += 1
-                    action = "creada" if created else "actualizada"
-                    logger.debug(f"  ✓ Sede {action}: {row.get('nombre_sede')}")
-                
-                except Exception as e:
-                    logger.error(f"  ❌ Error cargando sede {row.get('codigo_dane_sede')}: {str(e)}")
-                    sedes_fallidas += 1
-                    continue
-            
-            logger.info(f"✓ Sedes: {sedes_cargadas} cargadas, {sedes_fallidas} errores")
-            return sedes_cargadas
-        
-        except Exception as e:
-            logger.error(f"Error procesando sedes: {str(e)}")
-            raise
-

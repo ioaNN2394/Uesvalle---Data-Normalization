@@ -104,10 +104,11 @@ class PaeAsignacionAdmin(admin.ModelAdmin):
 
 @admin.register(Visita)
 class VisitaAdmin(admin.ModelAdmin):
-    list_display = ('id', 'fecha', 'sede_id', 'institucion_id', 'programa')
-    list_filter = ('fecha', 'programa')
-    search_fields = ('sede_id', 'institucion_id', 'programa')
-    ordering = ('-fecha',)
+    list_display = ('id', 'fechavisita', 'institucion_id', 'sede_id', 'programa', 'conceptovisita', 'nombrefuncionario')
+    list_filter = ('fechavisita', 'programa', 'conceptovisita')
+    search_fields = ('institucion_id', 'sede_id', 'programa', 'nombreactividad', 'nombrefuncionario')
+    ordering = ('-fechavisita',)
+    date_hierarchy = 'fechavisita'
 
 
 @admin.register(ETLFile)
