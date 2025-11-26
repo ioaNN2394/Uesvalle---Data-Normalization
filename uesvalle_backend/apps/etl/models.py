@@ -659,3 +659,24 @@ class ETLFile(models.Model):
         if total == 0:
             return 0
         return (self.rows_processed / total) * 100
+
+
+class Notification(models.Model):
+    """
+    Notificaciones de cambios en el concepto sanitario.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institucion = models.ForeignKey('Institucion', on_delete=models.CASCADE, related_name='notifications')
+    old_concept = models.CharField(max_length=10, null=True, blank=True)
+    new_concept = models.CharField(max_length=10)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = "Notificación"
+        verbose_name_plural = "Notificaciones"
+        db_table = 'uesvalle"."notification'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Cambio en {self.institucion.nombre}: {self.old_concept} -> {self.new_concept}"

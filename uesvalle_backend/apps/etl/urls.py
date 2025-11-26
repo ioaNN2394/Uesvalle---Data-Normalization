@@ -14,11 +14,12 @@ Rutas principales:
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views_v2
-from .views import MapMarkersView, MapDetailsView, InstitutionSearchView
+from .views import MapMarkersView, MapDetailsView, InstitutionSearchView, NotificationViewSet
 
 # Router para ViewSet de Jobs
 router = DefaultRouter()
 router.register(r'jobs', views_v2.ETLJobViewSet, basename='etl-jobs')
+router.register(r'notifications', NotificationViewSet, basename='notifications')
 
 # URLpatterns
 urlpatterns = [

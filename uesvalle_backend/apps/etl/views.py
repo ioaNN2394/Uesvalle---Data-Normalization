@@ -29,16 +29,17 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import (
     ETLRun, ETLFile, Institucion, Sede, DimMunicipio,
     DimEtnia, DimGrado, DimJornada, DimNivel, DimModalidadPAE,
-    FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita
+    FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita, Notification
 )
 from .serializers import (
     ETLRunSerializer, ETLFileSerializer, InstitucionSerializer,
     SedeSerializer, DimMunicipioSerializer, DimEtniaSerializer,
     DimGradoSerializer, DimJornadaSerializer, DimNivelSerializer,
     DimModalidadPAESerializer, FactMatriculaSerializer,
-    FactMatriculaEtnicaSerializer, PaeAsignacionSerializer, VisitaSerializer
+    FactMatriculaEtnicaSerializer, PaeAsignacionSerializer, VisitaSerializer, NotificationSerializer
 )
 from .tasks import etl_run_job, etl_cancel_job
+from .services.notification_service import NotificationService
 
 logger = logging.getLogger('etl.api')
 
@@ -636,3 +637,52 @@ class InstitutionSearchView(APIView):
         )[:10]
 
         return Response(list(results))
+
+from .services.notification_service import NotificationService
+from .models import Notification
+
+
+class NotificationViewSet(viewsets.ViewSet):
+    """
+    ViewSet para gestionar notificaciones.
+    """
+    permission_classes = [AllowAny]
+
+    @action(detail=False, methods=['post'], url_path='check-updates')
+    def check_updates(self, request):
+        """
+        Verifica actualizaciones en MySQL y genera notificaciones.
+        """
+        service = NotificationService()
+        count = service.check_for_updates()
+        
+        # Retornar conteo de no leídas
+        unread_count = Notification.objects.filter(is_read=False).count()
+        
+        return Response({
+            'status': 'success',
+            'new_notifications': count,
+            'unread_count': unread_count
+        })
+
+    @action(detail=False, methods=['get'])
+    def list_unread(self, request):
+        """
+        Lista las notificaciones no leídas.
+        """
+        notifications = Notification.objects.filter(is_read=False).order_by('-created_at')
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """
+        Marca una notificación como leída.
+        """
+        try:
+            notification = Notification.objects.get(pk=pk)
+            notification.is_read = True
+            notification.save()
+            return Response({'status': 'success'})
+        except Notification.DoesNotExist:
+            return Response({'status': 'error', 'message': 'Not found'}, status=404)

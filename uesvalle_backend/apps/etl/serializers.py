@@ -5,7 +5,7 @@ Maneja la serialización de modelos y validación de datos.
 from rest_framework import serializers
 from .models import (
     ETLRun, DimMunicipio, DimEtnia, DimGrado, DimJornada, DimNivel, DimModalidadPAE,
-    ETLFile, Institucion, Sede, FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita
+    ETLFile, Institucion, Sede, FactMatricula, FactMatriculaEtnica, PaeAsignacion, Visita, Notification
 )
 
 
@@ -194,3 +194,22 @@ class MapMarkerSerializer(serializers.Serializer):
     lat = serializers.DecimalField(max_digits=10, decimal_places=8)
     lon = serializers.DecimalField(max_digits=10, decimal_places=8)
     codigo_municipio = serializers.CharField()
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    institucion_nombre = serializers.CharField(source='institucion.nombre', read_only=True)
+    institucion_dane = serializers.CharField(source='institucion.dane_ie_id', read_only=True)
+    institucion_ues = serializers.CharField(source='institucion.uesvalle_ie_id', read_only=True)
+
+    class Meta:
+        model = Notification
+        fields = [
+            'id', 
+            'institucion_nombre', 
+            'institucion_dane', 
+            'institucion_ues', 
+            'old_concept', 
+            'new_concept', 
+            'created_at', 
+            'is_read'
+        ]

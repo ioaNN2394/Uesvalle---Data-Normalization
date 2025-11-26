@@ -55,12 +55,48 @@
           <line x1="12" y1="3" x2="12" y2="15"></line>
         </svg>
       </button>
-      <button class="navbar-icon-btn" title="Notificaciones">
+      <button class="navbar-icon-btn notification-btn" title="Notificaciones" @click="toggleNotifications">
         <img src="/campana.png" alt="Notificaciones" class="navbar-icon" />
+        <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount }}</span>
       </button>
       <button class="navbar-icon-btn" title="Reportes" @click="showReportModal = true">
         <img src="/reporte.png" alt="Reportes" class="navbar-icon" />
       </button>
+    </div>
+
+    <!-- Panel de Notificaciones -->
+    <div v-if="showNotifications" class="notification-panel">
+      <div class="notification-header">
+        <h3>Notificaciones</h3>
+        <button @click="showNotifications = false" class="close-btn">✕</button>
+      </div>
+      <div v-if="loadingNotifications" class="loading-state">
+        Cargando...
+      </div>
+      <div v-else-if="notifications.length === 0" class="empty-state">
+        No hay notificaciones nuevas
+      </div>
+      <div v-else class="notification-list">
+        <div 
+          v-for="notif in notifications" 
+          :key="notif.id" 
+          class="notification-item"
+          :class="{ unread: !notif.is_read }"
+          @click="markAsRead(notif)"
+        >
+          <div class="notif-title">{{ notif.institucion_nombre }}</div>
+          <div class="notif-codes">
+            <span>DANE: {{ notif.institucion_dane }}</span>
+            <span>UES: {{ notif.institucion_ues }}</span>
+          </div>
+          <div class="notif-change">
+            <span class="concept old">{{ notif.old_concept || 'N/A' }}</span>
+            <span class="arrow">→</span>
+            <span class="concept new">{{ notif.new_concept }}</span>
+          </div>
+          <div class="notif-date">{{ formatDate(notif.created_at) }}</div>
+        </div>
+      </div>
     </div>
 
     <ETLUploadModal 
@@ -72,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import ReportModal from '../modules/reports/components/ReportModal.vue'
 import ETLUploadModal from '../modules/etl/components/ETLUploadModal.vue'
 import { useMapControls } from '../shared/composables/useMapControls'
@@ -89,6 +125,12 @@ const activeTool = ref<string>('')
 const showReportModal = ref(false)
 const showETLModal = ref(false)
 const etlButtonRef = ref<HTMLButtonElement | null>(null)
+
+// Notificaciones
+const showNotifications = ref(false)
+const notifications = ref<any[]>([])
+const unreadCount = ref(0)
+const loadingNotifications = ref(false)
 
 // Estado local de filtros
 const selectedConcepts = ref<string[]>([])
@@ -137,6 +179,63 @@ const clearFiltersHandler = () => {
 const handleETLModalClose = () => {
   showETLModal.value = false
 }
+
+// Lógica de Notificaciones
+const checkUpdates = async () => {
+  try {
+    const response = await fetch('/api/etl/notifications/check-updates/', { method: 'POST' })
+    const data = await response.json()
+    if (data.status === 'success') {
+      unreadCount.value = data.unread_count
+      if (data.new_notifications > 0) {
+        // Opcional: Mostrar toast o alerta
+        console.log(`Se encontraron ${data.new_notifications} nuevas actualizaciones`)
+      }
+    }
+  } catch (error) {
+    console.error('Error checking updates:', error)
+  }
+}
+
+const fetchNotifications = async () => {
+  loadingNotifications.value = true
+  try {
+    const response = await fetch('/api/etl/notifications/list_unread/')
+    const data = await response.json()
+    notifications.value = data
+  } catch (error) {
+    console.error('Error fetching notifications:', error)
+  } finally {
+    loadingNotifications.value = false
+  }
+}
+
+const toggleNotifications = () => {
+  showNotifications.value = !showNotifications.value
+  if (showNotifications.value) {
+    fetchNotifications()
+  }
+}
+
+const markAsRead = async (notif: any) => {
+  try {
+    await fetch(`/api/etl/notifications/${notif.id}/mark_read/`, { method: 'POST' })
+    notif.is_read = true
+    // Remover de la lista o actualizar contador
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+    notifications.value = notifications.value.filter(n => n.id !== notif.id)
+  } catch (error) {
+    console.error('Error marking as read:', error)
+  }
+}
+
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleString()
+}
+
+onMounted(() => {
+  checkUpdates()
+})
 </script>
 
 <style scoped>
@@ -154,7 +253,7 @@ const handleETLModalClose = () => {
   position: relative; /* Para posicionar el panel */
 }
 
-.filter-panel {
+.filter-panel, .notification-panel {
   position: absolute;
   left: 60px;
   top: 15px;
@@ -165,6 +264,123 @@ const handleETLModalClose = () => {
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   z-index: 1000;
+}
+
+.notification-panel {
+  width: 320px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  top: 60px; /* Ajustar posición */
+}
+
+.notification-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  border-bottom: 1px solid #555;
+  padding-bottom: 10px;
+}
+
+.notification-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.notification-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.notification-item {
+  background: #444;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.notification-item:hover {
+  background: #555;
+}
+
+.notif-title {
+  font-weight: bold;
+  font-size: 13px;
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.notif-codes {
+  font-size: 11px;
+  color: #aaa;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.notif-change {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.concept {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.concept.old {
+  background: #555;
+  color: #ccc;
+}
+
+.concept.new {
+  background: #3498db;
+  color: white;
+}
+
+.arrow {
+  color: #aaa;
+}
+
+.notif-date {
+  font-size: 10px;
+  color: #888;
+  text-align: right;
+}
+
+.notification-btn {
+  position: relative;
+}
+
+.notification-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: #e74c3c;
+  color: white;
+  font-size: 10px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
 }
 
 .filter-panel h3 {
