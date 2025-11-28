@@ -67,17 +67,40 @@
     <!-- Panel de Notificaciones -->
     <div v-if="showNotifications" class="notification-panel">
       <div class="notification-header">
-        <h3>Notificaciones</h3>
-        <button @click="showNotifications = false" class="close-btn">✕</button>
+        <div class="header-title">
+          <svg class="bell-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+          <h3>Notificaciones{{ unreadCount > 0 ? ` (${unreadCount})` : '' }}</h3>
+        </div>
+        <button @click="showNotifications = false" class="close-btn" aria-label="Cerrar notificaciones">✕</button>
       </div>
       <div v-if="notifications.length > 0" class="notification-actions">
-        <button @click="deleteAllNotifications" class="btn-delete-all">Eliminar todas las notificaciones</button>
+        <button @click="openConfirmDeleteAll" class="btn-delete-all">Eliminar todas las notificaciones</button>
       </div>
       <div v-if="loadingNotifications" class="loading-state">
-        Cargando...
+        <div class="skeleton" v-for="i in 3" :key="i">
+          <div class="skeleton-line skeleton-title"></div>
+          <div class="skeleton-line skeleton-change"></div>
+          <div class="skeleton-line skeleton-date"></div>
+        </div>
+      </div>
+      <div v-else-if="errorNotifications" class="error-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="15" y1="9" x2="9" y2="15"></line>
+          <line x1="9" y1="9" x2="15" y2="15"></line>
+        </svg>
+        <p>Error al cargar notificaciones</p>
+        <button @click="fetchNotifications" class="btn-retry">Reintentar</button>
       </div>
       <div v-else-if="notifications.length === 0" class="empty-state">
-        No hay notificaciones nuevas
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+        </svg>
+        <p>No hay notificaciones nuevas</p>
       </div>
       <div v-else class="notification-list">
         <div 
@@ -86,19 +109,23 @@
           class="notification-item"
           :class="{ unread: !notif.is_read }"
         >
-          <button @click.stop="deleteNotification(notif.id)" class="delete-notif-btn" title="Eliminar notificación">✕</button>
-          <div @click="markAsRead(notif)" class="notif-content">
+          <div class="unread-indicator" v-if="!notif.is_read"></div>
+          <button @click.stop="deleteNotification(notif.id)" class="delete-notif-btn" title="Eliminar notificación" aria-label="Eliminar notificación">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/>
+            </svg>
+          </button>
+          <div @click="markAsRead(notif)" @keydown.enter="markAsRead(notif)" @keydown.space.prevent="markAsRead(notif)" class="notif-content" tabindex="0" role="button" :aria-label="`Notificación de ${notif.institucion_nombre}: ${notif.old_concept || 'N/A'} → ${notif.new_concept}`">
             <div class="notif-title">{{ notif.institucion_nombre }}</div>
-            <div class="notif-codes">
-              <span>DANE: {{ notif.institucion_dane }}</span>
-              <span>UES: {{ notif.institucion_ues }}</span>
-            </div>
+            <div class="notif-codes">DANE: {{ notif.institucion_dane }} | UES: {{ notif.institucion_ues }}</div>
             <div class="notif-change">
-              <span class="concept old">{{ notif.old_concept || 'N/A' }}</span>
-              <span class="arrow">→</span>
-              <span class="concept new">{{ notif.new_concept }}</span>
+              <span class="concept-badge old" :title="getConceptTooltip(notif.old_concept || 'N/A')">{{ notif.old_concept || 'N/A' }}</span>
+              <svg class="arrow-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12h14M12 5l7 7-7 7"/>
+              </svg>
+              <span class="concept-badge new" :title="getConceptTooltip(notif.new_concept)">{{ notif.new_concept }}</span>
             </div>
-            <div class="notif-date">{{ formatDate(notif.created_at) }}</div>
+            <div class="notif-date" :title="formatFullDate(notif.created_at)">{{ formatRelativeDate(notif.created_at) }}</div>
           </div>
         </div>
       </div>
@@ -108,12 +135,23 @@
       :is-open="showETLModal" 
       @close="handleETLModalClose"
     />
+    <!-- Confirm Delete All Modal -->
+    <div v-if="showConfirmDeleteAll" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title" @click="closeConfirmDeleteAll">
+      <div class="modal-dialog" @click.stop>
+        <h3 id="confirm-delete-title">Eliminar todas las notificaciones</h3>
+        <p>¿Está seguro de que desea eliminar todas las notificaciones? Esta acción no se puede deshacer.</p>
+        <div class="modal-actions">
+          <button class="modal-btn modal-cancel" @click="closeConfirmDeleteAll">Cancelar</button>
+          <button class="modal-btn modal-confirm" @click="performDeleteAll" ref="confirmDeleteAllBtnRef">Eliminar</button>
+        </div>
+      </div>
+    </div>
     <ReportModal v-if="showReportModal" @close="showReportModal = false" />
   </aside>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import ReportModal from '../modules/reports/components/ReportModal.vue'
 import ETLUploadModal from '../modules/etl/components/ETLUploadModal.vue'
 import { useMapControls } from '../shared/composables/useMapControls'
@@ -136,6 +174,11 @@ const showNotifications = ref(false)
 const notifications = ref<any[]>([])
 const unreadCount = ref(0)
 const loadingNotifications = ref(false)
+const errorNotifications = ref(false)
+// Modal confirmation state
+const showConfirmDeleteAll = ref(false)
+const confirmDeleteAllBtnRef = ref<HTMLButtonElement | null>(null)
+let escListener: ((e: KeyboardEvent) => void) | null = null
 
 // Estado local de filtros
 const selectedConcepts = ref<string[]>([])
@@ -204,12 +247,14 @@ const checkUpdates = async () => {
 
 const fetchNotifications = async () => {
   loadingNotifications.value = true
+  errorNotifications.value = false
   try {
     const response = await fetch('/api/etl/notifications/list_unread/')
     const data = await response.json()
     notifications.value = data
   } catch (error) {
     console.error('Error fetching notifications:', error)
+    errorNotifications.value = true
   } finally {
     loadingNotifications.value = false
   }
@@ -245,26 +290,81 @@ const deleteNotification = async (notifId: string) => {
   }
 }
 
-const deleteAllNotifications = async () => {
-  if (!confirm('¿Estás seguro de que deseas eliminar todas las notificaciones?')) {
-    return
+const openConfirmDeleteAll = async () => {
+  showConfirmDeleteAll.value = true
+  await nextTick()
+  // focus on confirm button
+  if (confirmDeleteAllBtnRef.value) confirmDeleteAllBtnRef.value.focus()
+  // add escape key listener
+  escListener = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      closeConfirmDeleteAll()
+    }
   }
+  window.addEventListener('keydown', escListener)
+}
+
+const closeConfirmDeleteAll = () => {
+  showConfirmDeleteAll.value = false
+  if (escListener) {
+    window.removeEventListener('keydown', escListener)
+    escListener = null
+  }
+}
+
+const performDeleteAll = async () => {
   try {
     await fetch('/api/etl/notifications/delete-all/', { method: 'DELETE' })
     // Limpiar la lista y el contador
     notifications.value = []
     unreadCount.value = 0
+    showConfirmDeleteAll.value = false
   } catch (error) {
     console.error('Error deleting all notifications:', error)
+  } finally {
+    if (escListener) {
+      window.removeEventListener('keydown', escListener)
+      escListener = null
+    }
   }
 }
 
-const formatDate = (dateString: string) => {
+const formatRelativeDate = (dateString: string) => {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / (1000 * 60))
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+  if (diffMins < 1) return 'ahora'
+  if (diffMins < 60) return `hace ${diffMins} min`
+  if (diffHours < 24) return `hace ${diffHours} h`
+  if (diffDays < 7) return `hace ${diffDays} d`
+  return date.toLocaleDateString()
+}
+
+const formatFullDate = (dateString: string) => {
   return new Date(dateString).toLocaleString()
+}
+
+const getConceptTooltip = (concept: string) => {
+  const tooltips: { [key: string]: string } = {
+    'F': 'Favorable',
+    'D': 'Desfavorable',
+    'FCR': 'Favorable con Recomendaciones'
+  }
+  return tooltips[concept] || concept
 }
 
 onMounted(() => {
   checkUpdates()
+})
+
+onBeforeUnmount(() => {
+  if (escListener) {
+    window.removeEventListener('keydown', escListener)
+  }
 })
 </script>
 
@@ -301,7 +401,8 @@ onMounted(() => {
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  top: 60px; /* Ajustar posición */
+  top: 60px;
+  max-width: 90vw;
 }
 
 .notification-header {
@@ -313,9 +414,20 @@ onMounted(() => {
   padding-bottom: 10px;
 }
 
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bell-icon {
+  color: #3498db;
+}
+
 .notification-header h3 {
   margin: 0;
   font-size: 16px;
+  color: #fff;
 }
 
 .close-btn {
@@ -324,93 +436,114 @@ onMounted(() => {
   color: #aaa;
   cursor: pointer;
   font-size: 18px;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  background: #555;
+  color: #fff;
 }
 
 .notification-list {
   overflow-y: auto;
   flex: 1;
+  max-height: 400px;
 }
 
 .notification-item {
   background: #444;
-  border-radius: 6px;
-  padding: 10px;
-  margin-bottom: 10px;
-  transition: background 0.2s;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+  transition: all 0.2s ease;
   position: relative;
+  border-left: 4px solid transparent;
+}
+
+.notification-item.unread {
+  background: rgba(52, 152, 219, 0.05);
+  border-left-color: #3498db;
 }
 
 .notification-item:hover {
-  background: #555;
+  background: #4a4a4a;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.unread-indicator {
+  position: absolute;
+  left: -2px;
+  top: 16px;
+  width: 8px;
+  height: 8px;
+  background: #3498db;
+  border-radius: 50%;
+  border: 2px solid #333;
 }
 
 .notif-title {
-  font-weight: bold;
-  font-size: 13px;
-  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 8px;
   color: #fff;
+  line-height: 1.3;
 }
 
 .notif-codes {
-  font-size: 11px;
+  font-size: 12px;
   color: #aaa;
-  display: flex;
-  gap: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 12px;
+  font-family: 'Courier New', monospace;
+  opacity: 0.8;
 }
 
 .notif-change {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 8px;
+}
+
+.concept-badge {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 600;
   font-size: 12px;
-  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.concept {
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: bold;
-}
-
-.concept.old {
+.concept-badge.old {
   background: #555;
   color: #ccc;
+  border: 1px solid #666;
 }
 
-.concept.new {
-  background: #3498db;
+.concept-badge.new {
+  background: linear-gradient(135deg, #f39c12, #e67e22);
   color: white;
+  border: 1px solid #d35400;
+  box-shadow: 0 1px 3px rgba(243, 156, 18, 0.3);
 }
 
-.arrow {
-  color: #aaa;
+.arrow-icon {
+  color: #888;
+  flex-shrink: 0;
 }
 
 .notif-date {
-  font-size: 10px;
+  font-size: 11px;
   color: #888;
   text-align: right;
-}
-
-.notification-btn {
-  position: relative;
-}
-
-.notification-badge {
-  position: absolute;
-  top: 0;
-  right: 0;
-  background: #e74c3c;
-  color: white;
-  font-size: 10px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: bold;
+  opacity: 0.7;
 }
 
 .notification-actions {
@@ -421,43 +554,239 @@ onMounted(() => {
 
 .btn-delete-all {
   width: 100%;
-  padding: 8px;
-  background: #e74c3c;
+  padding: 10px;
+  background: #7f8c8d;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-delete-all:hover {
+  background: #95a5a6;
+  transform: translateY(-1px);
+}
+
+.delete-notif-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  background-color: #ef4444;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 150ms ease-out;
+  color: white;
+  opacity: 0;
+  z-index: 10;
+}
+
+.notification-item:hover .delete-notif-btn {
+  opacity: 1;
+}
+
+.delete-notif-btn:hover {
+  background-color: #dc2626;
+  transform: scale(1.1);
+}
+
+.delete-notif-btn:active {
+  transform: scale(0.95);
+}
+
+.delete-notif-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  opacity: 1;
+}
+
+.notif-content {
+  cursor: pointer;
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
+
+.skeleton {
+  background: #444;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.skeleton-line {
+  background: #555;
+  border-radius: 4px;
+  height: 12px;
+  margin-bottom: 8px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.skeleton-title {
+  width: 70%;
+  height: 16px;
+}
+
+.skeleton-change {
+  width: 50%;
+  height: 14px;
+}
+
+.skeleton-date {
+  width: 30%;
+  height: 10px;
+  margin-bottom: 0;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.empty-state, .error-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #aaa;
+}
+
+.empty-state svg, .error-state svg {
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.empty-state p, .error-state p {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+}
+
+.btn-retry {
+  padding: 8px 16px;
+  background: #3498db;
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  font-weight: bold;
   transition: background 0.2s;
 }
 
-.btn-delete-all:hover {
-  background: #c0392b;
+.btn-retry:hover {
+  background: #2980b9;
 }
 
-.delete-notif-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: rgba(0, 0, 0, 0.5);
-  border: none;
-  color: #aaa;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  cursor: pointer;
-  font-size: 14px;
+/* Modal: confirm delete all */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
-  z-index: 10;
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(5px);
+  z-index: 3000;
 }
 
-.delete-notif-btn:hover {
-  background: #e74c3c;
-  color: white;
+.modal-dialog {
+  width: 90%;
+  max-width: 420px;
+  background: #222;
+  color: #fff;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.6);
+  transform: translateY(-8px);
+  opacity: 0;
+  animation: modalShow 200ms ease-out forwards;
+}
+
+@keyframes modalShow {
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-dialog h3 {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+}
+
+.modal-dialog p { margin: 0 0 16px 0; color: #ddd; }
+
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+.modal-btn { padding: 8px 12px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
+.modal-cancel { background: transparent; color: #ddd; border: 1px solid rgba(255,255,255,0.06); }
+.modal-confirm { background: #ef4444; color: white; }
+
+.modal-confirm:hover { background: #dc2626; transform: translateY(-1px); }
+.modal-cancel:hover { background: rgba(255,255,255,0.03); }
+
+/* Accessibility */
+.notif-content:focus {
+  outline: 2px solid #3498db;
+  outline-offset: 2px;
+}
+
+.delete-notif-btn:focus {
+  outline: 2px solid #e74c3c;
+  outline-offset: 2px;
+}
+
+.btn-delete-all:focus,
+.btn-retry:focus,
+.close-btn:focus {
+  outline: 2px solid #3498db;
+  outline-offset: 2px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .notification-panel {
+    width: 90vw;
+    max-width: 400px;
+    left: 5vw;
+  }
+  
+  .notification-item {
+    padding: 12px;
+  }
+  
+  .notif-title {
+    font-size: 14px;
+  }
+  
+  .delete-notif-btn {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .notification-panel {
+    width: 95vw;
+    left: 2.5vw;
+    top: 70px;
+  }
+  
+  .notification-header h3 {
+    font-size: 14px;
+  }
+  
+  .notif-codes {
+    font-size: 11px;
+  }
+  
+  .delete-notif-btn {
+    opacity: 1;
+  }
 }
 
 .notif-content {

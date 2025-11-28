@@ -39,6 +39,7 @@
             <div class="item-codes">
               <span v-if="item.dane_ie_id" class="code-badge dane">DANE: {{ item.dane_ie_id }}</span>
               <span v-if="item.uesvalle_ie_id" class="code-badge ues">UES: {{ item.uesvalle_ie_id }}</span>
+              <span v-if="!item.lat || !item.lon" class="code-badge no-coords">Sin coordenadas</span>
             </div>
           </div>
         </div>
@@ -50,6 +51,154 @@
     
     
   </header>
+
+  <!-- Modal de detalles de institución (sin coordenadas) -->
+  <Teleport to="body">
+    <div v-if="showDetailModal" class="detail-modal-overlay" @click.self="closeDetailModal">
+      <div class="detail-modal">
+        <button @click="closeDetailModal" class="modal-close-btn">✕</button>
+        
+        <div v-if="loadingDetails" class="modal-loading">
+          <div class="spinner"></div>
+          <p>Cargando información...</p>
+        </div>
+        
+        <div v-else-if="selectedInstitution" class="institution-details">
+          <h2>{{ selectedInstitution.nombre }}</h2>
+          
+          <!-- Badge de advertencia sin coordenadas -->
+          <div class="no-coords-warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>No se pudo determinar la ubicación de esta institución en el mapa, sin embargo esta registrada correctamente</span>
+          </div>
+          
+          <!-- Concepto Actual con Badge de Color -->
+          <div class="concepto-badge" :class="getConceptoClass(selectedInstitution.concepto_actual)">
+            {{ getConceptoLabel(selectedInstitution.concepto_actual) }}
+          </div>
+          
+          <!-- Identificadores -->
+          <div class="info-section">
+            <h3>Identificadores</h3>
+            <p><strong>ID UESValle:</strong> {{ selectedInstitution.uesvalle_ie_id || 'No registrado' }}</p>
+            <p><strong>Código DANE:</strong> {{ selectedInstitution.dane_ie_id || 'No registrado' }}</p>
+          </div>
+          
+          <!-- Información General -->
+          <div class="info-section">
+            <h3>Información General</h3>
+            <p><strong>Municipio:</strong> {{ selectedInstitution.codigo_municipio }}</p>
+            <p><strong>Dirección:</strong> {{ selectedInstitution.direccion || 'N/A' }}</p>
+            <p><strong>Teléfono:</strong> {{ selectedInstitution.telefono || 'N/A' }}</p>
+            <p><strong>Email:</strong> {{ selectedInstitution.email || 'N/A' }}</p>
+          </div>
+          
+          <!-- Historial de Visitas -->
+          <div class="info-section visitas-section" v-if="selectedInstitution.visitas && selectedInstitution.visitas.length > 0">
+            <h3>Historial de Visitas ({{ selectedInstitution.total_visitas }})</h3>
+            <div class="visitas-list">
+              <div 
+                v-for="(visita, index) in selectedInstitution.visitas" 
+                :key="visita.id" 
+                class="visita-item"
+                :class="{ 'visita-actual': index === 0 }"
+              >
+                <div class="visita-header">
+                  <span class="visita-fecha">{{ formatDate(visita.fechavisita) }}</span>
+                  <span class="visita-concepto" :class="getConceptoClass(visita.conceptovisita)">
+                    {{ visita.conceptovisita }}
+                  </span>
+                </div>
+                <p class="visita-funcionario">
+                  <strong>Funcionario:</strong> {{ visita.nombrefuncionario }} {{ visita.apellidofuncionario }}
+                  <span class="codigo-funcionario">({{ visita.codigofuncionario }})</span>
+                </p>
+                
+                <!-- Metadata de la visita (expandible) -->
+                <details v-if="visita.metadata && Object.keys(visita.metadata).length > 0" class="metadata-details">
+                  <summary>Ver detalles adicionales</summary>
+                  <div class="metadata-grid">
+                    <!-- Información del Establecimiento -->
+                    <div class="metadata-group" v-if="hasEstablecimientoData(visita.metadata)">
+                      <h4>Establecimiento</h4>
+                      <p v-if="visita.metadata.direccionestablecimiento"><strong>Dirección:</strong> {{ visita.metadata.direccionestablecimiento }}</p>
+                      <p v-if="visita.metadata.celular"><strong>Celular:</strong> {{ visita.metadata.celular }}</p>
+                      <p v-if="visita.metadata.totaltrabajador"><strong>Trabajadores:</strong> {{ visita.metadata.totaltrabajador }}</p>
+                      <p v-if="visita.metadata.numerosdocente"><strong>Docentes:</strong> {{ visita.metadata.numerosdocente }}</p>
+                    </div>
+                    
+                    <!-- Información de Estudiantes -->
+                    <div class="metadata-group" v-if="hasEstudiantesData(visita.metadata)">
+                      <h4>Estudiantes</h4>
+                      <p v-if="visita.metadata.estudianteshombre"><strong>Hombres:</strong> {{ visita.metadata.estudianteshombre }}</p>
+                      <p v-if="visita.metadata.estudiantesmujer"><strong>Mujeres:</strong> {{ visita.metadata.estudiantesmujer }}</p>
+                      <p v-if="visita.metadata.tienepae"><strong>Tiene PAE:</strong> {{ visita.metadata.tienepae }}</p>
+                    </div>
+                    
+                    <!-- Ubicación -->
+                    <div class="metadata-group" v-if="hasUbicacionData(visita.metadata)">
+                      <h4>Ubicación</h4>
+                      <p v-if="visita.metadata.nombremunicipio"><strong>Municipio:</strong> {{ visita.metadata.nombremunicipio }}</p>
+                      <p v-if="visita.metadata.nombrecorregimiento"><strong>Corregimiento:</strong> {{ visita.metadata.nombrecorregimiento }}</p>
+                      <p v-if="visita.metadata.nombrearo"><strong>ARO:</strong> {{ visita.metadata.nombrearo }}</p>
+                    </div>
+                    
+                    <!-- Representante Legal -->
+                    <div class="metadata-group" v-if="hasRepresentanteData(visita.metadata)">
+                      <h4>Representante Legal</h4>
+                      <p><strong>Nombre:</strong> {{ visita.metadata.nombrerepresentante }} {{ visita.metadata.apellidorepresentante }}</p>
+                    </div>
+                    
+                    <!-- Resultado de la Visita -->
+                    <div class="metadata-group" v-if="hasResultadoData(visita.metadata)">
+                      <h4>Resultado</h4>
+                      <p v-if="visita.metadata.cumplimiento"><strong>Cumplimiento:</strong> {{ visita.metadata.cumplimiento }}%</p>
+                      <p v-if="visita.metadata.plazo"><strong>Plazo:</strong> {{ visita.metadata.plazo }} días</p>
+                      <p v-if="visita.metadata.fecha_cargue"><strong>Fecha cargue:</strong> {{ visita.metadata.fecha_cargue }}</p>
+                    </div>
+                    
+                    <!-- Usuario que cargó -->
+                    <div class="metadata-group" v-if="visita.metadata.nombreusuario">
+                      <h4>Cargado por</h4>
+                      <p>{{ visita.metadata.nombreusuario }}</p>
+                    </div>
+                  </div>
+                  
+                  <!-- Requerimientos/Observaciones -->
+                  <div v-if="visita.requerimientos || visita.observacion" class="observaciones-section">
+                    <h4 v-if="visita.requerimientos">Requerimientos</h4>
+                    <p v-if="visita.requerimientos" class="observacion-text">{{ visita.requerimientos }}</p>
+                    <h4 v-if="visita.observacion">Observaciones</h4>
+                    <p v-if="visita.observacion" class="observacion-text">{{ visita.observacion }}</p>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Sedes de la institución -->
+          <div class="info-section" v-if="selectedInstitution.sedes && selectedInstitution.sedes.length > 0">
+            <h3>Sedes ({{ selectedInstitution.sedes?.length || 0 }})</h3>
+            <ul class="sedes-list">
+              <li v-for="sede in selectedInstitution.sedes" :key="sede.id" class="sede-item">
+                <strong>{{ sede.nombre }}</strong>
+                <p>{{ sede.direccion }}</p>
+                <p v-if="sede.lat && sede.lon" class="coords">{{ sede.lat?.toFixed(6) }}, {{ sede.lon?.toFixed(6) }}</p>
+              </li>
+            </ul>
+          </div>
+        </div>
+        
+        <div v-else class="modal-error">
+          <p>No se pudo cargar la información de la institución</p>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -63,6 +212,11 @@ const results = ref<any[]>([])
 const showResults = ref(false)
 const loading = ref(false)
 let debounceTimer: any = null
+
+// Modal de detalles
+const showDetailModal = ref(false)
+const loadingDetails = ref(false)
+const selectedInstitution = ref<any>(null)
 
 const handleInput = () => {
   if (debounceTimer) clearTimeout(debounceTimer)
@@ -95,6 +249,27 @@ const handleBlur = () => {
   }, 200)
 }
 
+// Función para obtener detalles de la institución
+async function fetchInstitutionDetails(institucionId: string) {
+  try {
+    loadingDetails.value = true
+    const response = await fetch(`/api/etl/map/institucion/${institucionId}/`)
+    const data = await response.json()
+    
+    if (data.status === 'success') {
+      selectedInstitution.value = data.institucion
+      console.log('✓ Detalles de institución cargados:', data.institucion)
+    } else {
+      selectedInstitution.value = null
+    }
+  } catch (error) {
+    console.error('Error obteniendo detalles:', error)
+    selectedInstitution.value = null
+  } finally {
+    loadingDetails.value = false
+  }
+}
+
 const selectResult = (item: any) => {
   console.log('Selected result:', item)
   searchQuery.value = item.nombre
@@ -104,8 +279,70 @@ const selectResult = (item: any) => {
     console.log('Triggering selection with coords:', item.lat, item.lon)
     selectInstitution(item.id, Number(item.lat), Number(item.lon))
   } else {
-    console.warn('Selected item has no coordinates:', item)
+    // Mostrar modal con detalles para instituciones sin coordenadas
+    console.log('Opening detail modal for item without coordinates:', item)
+    showDetailModal.value = true
+    fetchInstitutionDetails(item.id)
   }
+}
+
+// Cerrar modal de detalles
+function closeDetailModal() {
+  showDetailModal.value = false
+  selectedInstitution.value = null
+}
+
+// ===== FUNCIONES HELPER =====
+function getConceptoClass(concepto: string | null): string {
+  if (!concepto) return 'concepto-none'
+  switch (concepto.toUpperCase()) {
+    case 'F': return 'concepto-favorable'
+    case 'D': return 'concepto-desfavorable'
+    case 'FCR': return 'concepto-fcr'
+    default: return 'concepto-none'
+  }
+}
+
+function getConceptoLabel(concepto: string | null): string {
+  if (!concepto) return 'Sin concepto'
+  switch (concepto.toUpperCase()) {
+    case 'F': return 'Favorable'
+    case 'D': return 'Desfavorable'
+    case 'FCR': return 'Favorable con Requerimientos'
+    default: return concepto
+  }
+}
+
+function formatDate(dateString: string | null): string {
+  if (!dateString) return 'N/A'
+  const parts = dateString.split('T')[0].split('-')
+  const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]))
+  return date.toLocaleDateString('es-CO', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+// Funciones para verificar si hay datos en cada grupo de metadata
+function hasEstablecimientoData(metadata: any): boolean {
+  return metadata && (metadata.direccionestablecimiento || metadata.celular || metadata.totaltrabajador || metadata.numerosdocente)
+}
+
+function hasEstudiantesData(metadata: any): boolean {
+  return metadata && (metadata.estudianteshombre || metadata.estudiantesmujer || metadata.tienepae)
+}
+
+function hasUbicacionData(metadata: any): boolean {
+  return metadata && (metadata.nombremunicipio || metadata.nombrecorregimiento || metadata.nombrearo)
+}
+
+function hasRepresentanteData(metadata: any): boolean {
+  return metadata && (metadata.nombrerepresentante || metadata.apellidorepresentante)
+}
+
+function hasResultadoData(metadata: any): boolean {
+  return metadata && (metadata.cumplimiento || metadata.plazo || metadata.fecha_cargue)
 }
 </script>
 
@@ -306,5 +543,336 @@ const selectResult = (item: any) => {
   width: 24px;
   height: 24px;
   object-fit: contain;
+}
+
+/* Badge sin coordenadas en resultados de búsqueda */
+.code-badge.no-coords {
+  background: #fff3e0;
+  color: #e65100;
+  font-weight: 500;
+}
+
+/* ===== MODAL DE DETALLES ===== */
+.detail-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.detail-modal {
+  background: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  position: relative;
+  animation: slideUp 0.25s ease;
+  padding: 24px;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.modal-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: #f5f5f5;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: #666;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.modal-close-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.modal-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: #666;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #f0f0f0;
+  border-top-color: #663399;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.modal-error {
+  text-align: center;
+  padding: 40px;
+  color: #d32f2f;
+}
+
+/* Advertencia sin coordenadas */
+.no-coords-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #fff3e0;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  color: #e65100;
+  font-size: 13px;
+}
+
+.no-coords-warning svg {
+  flex-shrink: 0;
+}
+
+/* Estilos del contenido del modal */
+.institution-details h2 {
+  margin: 0 0 12px;
+  color: #333;
+  font-size: 18px;
+  padding-right: 40px;
+}
+
+.concepto-badge {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 15px;
+}
+
+.concepto-favorable {
+  background: #d4edda;
+  color: #155724;
+}
+
+.concepto-desfavorable {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.concepto-fcr {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.concepto-none {
+  background: #e2e3e5;
+  color: #6c757d;
+}
+
+.info-section {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #eee;
+}
+
+.info-section h3 {
+  font-size: 14px;
+  color: #333;
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.info-section h4 {
+  font-size: 12px;
+  color: #555;
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+.info-section p {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #666;
+}
+
+/* Visitas */
+.visitas-list {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.visita-item {
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-left: 3px solid #ccc;
+}
+
+.visita-item.visita-actual {
+  border-left-color: #663399;
+  background: #f3f0f7;
+}
+
+.visita-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.visita-fecha {
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+}
+
+.visita-concepto {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.visita-funcionario {
+  font-size: 12px;
+  color: #555;
+  margin: 4px 0;
+}
+
+.codigo-funcionario {
+  font-size: 10px;
+  color: #999;
+}
+
+/* Metadata expandible */
+.metadata-details {
+  margin-top: 10px;
+}
+
+.metadata-details summary {
+  font-size: 11px;
+  color: #663399;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.metadata-details summary:hover {
+  text-decoration: underline;
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  background: #fff;
+  border-radius: 4px;
+}
+
+.metadata-group {
+  font-size: 11px;
+}
+
+.metadata-group h4 {
+  font-size: 11px;
+  color: #663399;
+  margin: 0 0 4px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 2px;
+}
+
+.metadata-group p {
+  margin: 2px 0;
+  font-size: 11px;
+  color: #555;
+}
+
+.observaciones-section {
+  margin-top: 10px;
+  padding: 10px;
+  background: #fff8e1;
+  border-radius: 4px;
+}
+
+.observaciones-section h4 {
+  font-size: 11px;
+  color: #ff6f00;
+  margin: 0 0 4px;
+}
+
+.observacion-text {
+  font-size: 11px;
+  color: #666;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+
+/* Sedes */
+.sedes-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sede-item {
+  background: #f9f9f9;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.sede-item strong {
+  display: block;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.sede-item p {
+  margin: 4px 0;
+  color: #666;
+}
+
+.coords {
+  font-family: monospace;
+  font-size: 11px;
+  color: #999;
 }
 </style>
