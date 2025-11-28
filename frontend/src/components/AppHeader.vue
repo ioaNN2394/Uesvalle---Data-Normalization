@@ -91,10 +91,10 @@
           <!-- Información General -->
           <div class="info-section">
             <h3>Información General</h3>
-            <p><strong>Municipio:</strong> {{ selectedInstitution.codigo_municipio }}</p>
-            <p><strong>Dirección:</strong> {{ selectedInstitution.direccion || 'N/A' }}</p>
-            <p><strong>Teléfono:</strong> {{ selectedInstitution.telefono || 'N/A' }}</p>
-            <p><strong>Email:</strong> {{ selectedInstitution.email || 'N/A' }}</p>
+            <p><strong>Municipio:</strong> {{ getInstitutionMunicipio(selectedInstitution) }}</p>
+            <p><strong>Dirección:</strong> {{ getInstitutionDireccion(selectedInstitution) }}</p>
+            <p><strong>Teléfono:</strong> {{ getInstitutionTelefono(selectedInstitution) }}</p>
+            <p><strong>Email:</strong> {{ getInstitutionEmail(selectedInstitution) }}</p>
           </div>
           
           <!-- Historial de Visitas -->
@@ -343,6 +343,31 @@ function hasRepresentanteData(metadata: any): boolean {
 
 function hasResultadoData(metadata: any): boolean {
   return metadata && (metadata.cumplimiento || metadata.plazo || metadata.fecha_cargue)
+}
+
+// Helper functions to extract institution info from latest visit metadata
+function getLatestVisitMetadata(institution: any): any {
+  if (!institution || !institution.visitas || institution.visitas.length === 0) return null
+  return institution.visitas[0]?.metadata || null
+}
+
+function getInstitutionMunicipio(institution: any): string {
+  const metadata = getLatestVisitMetadata(institution)
+  return metadata?.nombremunicipio || institution?.codigo_municipio || 'N/A'
+}
+
+function getInstitutionDireccion(institution: any): string {
+  const metadata = getLatestVisitMetadata(institution)
+  return metadata?.direccionestablecimiento || institution?.direccion || 'N/A'
+}
+
+function getInstitutionTelefono(institution: any): string {
+  const metadata = getLatestVisitMetadata(institution)
+  return metadata?.celular || institution?.telefono || 'N/A'
+}
+
+function getInstitutionEmail(institution: any): string {
+  return institution?.email || 'N/A'
 }
 </script>
 
