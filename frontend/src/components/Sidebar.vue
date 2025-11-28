@@ -70,6 +70,9 @@
         <h3>Notificaciones</h3>
         <button @click="showNotifications = false" class="close-btn">✕</button>
       </div>
+      <div v-if="notifications.length > 0" class="notification-actions">
+        <button @click="deleteAllNotifications" class="btn-delete-all">Eliminar todas las notificaciones</button>
+      </div>
       <div v-if="loadingNotifications" class="loading-state">
         Cargando...
       </div>
@@ -82,19 +85,21 @@
           :key="notif.id" 
           class="notification-item"
           :class="{ unread: !notif.is_read }"
-          @click="markAsRead(notif)"
         >
-          <div class="notif-title">{{ notif.institucion_nombre }}</div>
-          <div class="notif-codes">
-            <span>DANE: {{ notif.institucion_dane }}</span>
-            <span>UES: {{ notif.institucion_ues }}</span>
+          <button @click.stop="deleteNotification(notif.id)" class="delete-notif-btn" title="Eliminar notificación">✕</button>
+          <div @click="markAsRead(notif)" class="notif-content">
+            <div class="notif-title">{{ notif.institucion_nombre }}</div>
+            <div class="notif-codes">
+              <span>DANE: {{ notif.institucion_dane }}</span>
+              <span>UES: {{ notif.institucion_ues }}</span>
+            </div>
+            <div class="notif-change">
+              <span class="concept old">{{ notif.old_concept || 'N/A' }}</span>
+              <span class="arrow">→</span>
+              <span class="concept new">{{ notif.new_concept }}</span>
+            </div>
+            <div class="notif-date">{{ formatDate(notif.created_at) }}</div>
           </div>
-          <div class="notif-change">
-            <span class="concept old">{{ notif.old_concept || 'N/A' }}</span>
-            <span class="arrow">→</span>
-            <span class="concept new">{{ notif.new_concept }}</span>
-          </div>
-          <div class="notif-date">{{ formatDate(notif.created_at) }}</div>
         </div>
       </div>
     </div>
@@ -229,6 +234,31 @@ const markAsRead = async (notif: any) => {
   }
 }
 
+const deleteNotification = async (notifId: string) => {
+  try {
+    await fetch(`/api/etl/notifications/${notifId}/delete_notification/`, { method: 'DELETE' })
+    // Remover de la lista y actualizar contador
+    notifications.value = notifications.value.filter(n => n.id !== notifId)
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+  } catch (error) {
+    console.error('Error deleting notification:', error)
+  }
+}
+
+const deleteAllNotifications = async () => {
+  if (!confirm('¿Estás seguro de que deseas eliminar todas las notificaciones?')) {
+    return
+  }
+  try {
+    await fetch('/api/etl/notifications/delete-all/', { method: 'DELETE' })
+    // Limpiar la lista y el contador
+    notifications.value = []
+    unreadCount.value = 0
+  } catch (error) {
+    console.error('Error deleting all notifications:', error)
+  }
+}
+
 const formatDate = (dateString: string) => {
   return new Date(dateString).toLocaleString()
 }
@@ -306,8 +336,8 @@ onMounted(() => {
   border-radius: 6px;
   padding: 10px;
   margin-bottom: 10px;
-  cursor: pointer;
   transition: background 0.2s;
+  position: relative;
 }
 
 .notification-item:hover {
@@ -381,6 +411,57 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   font-weight: bold;
+}
+
+.notification-actions {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #555;
+}
+
+.btn-delete-all {
+  width: 100%;
+  padding: 8px;
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  transition: background 0.2s;
+}
+
+.btn-delete-all:hover {
+  background: #c0392b;
+}
+
+.delete-notif-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  color: #aaa;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  z-index: 10;
+}
+
+.delete-notif-btn:hover {
+  background: #e74c3c;
+  color: white;
+}
+
+.notif-content {
+  cursor: pointer;
 }
 
 .filter-panel h3 {
