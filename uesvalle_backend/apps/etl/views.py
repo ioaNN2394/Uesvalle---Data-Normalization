@@ -559,7 +559,7 @@ class MapDetailsView(APIView):
     
     def get(self, request, institucion_id):
         try:
-            from .models import Institucion, Sede
+            from .models import Institucion, Sede, Visita
             
             institucion = Institucion.objects.get(id=institucion_id)
             
@@ -583,6 +583,31 @@ class MapDetailsView(APIView):
                 }
                 sedes_list.append(sede_dict)
             
+            # Obtener historial de visitas ordenadas por fecha (más reciente primero)
+            visitas = Visita.objects.filter(
+                institucion_id=institucion.id
+            ).order_by('-fechavisita')
+            
+            visitas_list = []
+            for visita in visitas:
+                visita_dict = {
+                    'id': str(visita.id),
+                    'fechavisita': visita.fechavisita.isoformat() if visita.fechavisita else None,
+                    'conceptovisita': visita.conceptovisita,
+                    'nombrefuncionario': visita.nombrefuncionario,
+                    'apellidofuncionario': visita.apellidofuncionario,
+                    'codigofuncionario': visita.codigofuncionario,
+                    'motivovisita': visita.motivovisita,
+                    'requerimientos': visita.requerimientos,
+                    'observacion': visita.observacion,
+                    'metadata': visita.metadata  # Contiene todos los datos adicionales
+                }
+                visitas_list.append(visita_dict)
+            
+            # La última visita (más reciente) para mostrar el concepto actual
+            ultima_visita = visitas.first()
+            concepto_actual = ultima_visita.conceptovisita if ultima_visita else None
+            
             return Response({
                 'status': 'success',
                 'institucion': {
@@ -598,7 +623,10 @@ class MapDetailsView(APIView):
                     'estado': institucion.estado,
                     'lat': float(institucion.lat) if institucion.lat else None,
                     'lon': float(institucion.lon) if institucion.lon else None,
-                    'sedes': sedes_list
+                    'concepto_actual': concepto_actual,
+                    'sedes': sedes_list,
+                    'visitas': visitas_list,
+                    'total_visitas': len(visitas_list)
                 }
             }, status=status.HTTP_200_OK)
         
