@@ -187,25 +187,26 @@ class Institucion(models.Model):
     )
     
     # IDs oficiales - Sincronización según instructivo
+    # NOTA: unique=False porque pueden existir instituciones con el mismo código
+    # pero diferente nombre (ej: PRIMARIA vs BACHILLER del mismo establecimiento)
     dane_ie_id = models.TextField(
         null=True, 
-        blank=True, 
-        unique=True,
+        blank=True,
+        db_index=True,
         verbose_name="Código DANE IE",
         help_text="11 dígitos - Viene de MySQL.codigodane o CSV.COD_DANE (si coincide)"
     )
     sed_ie_id = models.TextField(
         null=True, 
-        blank=True, 
-        unique=True,
+        blank=True,
         verbose_name="ID SED IE"
     ) 
     uesvalle_ie_id = models.TextField(
         null=True, 
-        blank=True, 
-        unique=True,
+        blank=True,
+        db_index=True,
         verbose_name="ID UESValle IE",
-        help_text="OBLIGATORIO de MySQL.identificacion - Fuente de verdad"
+        help_text="De MySQL.identificacion - Puede repetirse si hay diferentes sedes/niveles"
     )
     
     # Ubicación
@@ -265,6 +266,7 @@ class Institucion(models.Model):
         indexes = [
             models.Index(fields=['uesvalle_ie_id']),
             models.Index(fields=['codigo_municipio']),
+            models.Index(fields=['uesvalle_ie_id', 'nombre']),  # Para búsqueda compuesta
         ]
     
     def __str__(self):

@@ -405,17 +405,26 @@ class MySQLCSVSyncProcessor:
     
     def _load_dictionaries(self) -> None:
         """Carga/recarga diccionarios de mapeo desde BD."""
-        # Instituciones por DANE
-        self.dict_instituciones_by_dane = {
-            inst.dane_ie_id: str(inst.id)
-            for inst in Institucion.objects.filter(dane_ie_id__isnull=False)
-        }
+        # Instituciones por DANE (puede haber múltiples con mismo DANE)
+        self.dict_instituciones_by_dane = {}
+        for inst in Institucion.objects.filter(dane_ie_id__isnull=False):
+            if inst.dane_ie_id not in self.dict_instituciones_by_dane:
+                self.dict_instituciones_by_dane[inst.dane_ie_id] = []
+            self.dict_instituciones_by_dane[inst.dane_ie_id].append(str(inst.id))
         
-        # Instituciones por uesvalle_ie_id
-        self.dict_instituciones_by_uesvalle = {
-            inst.uesvalle_ie_id: str(inst.id)
-            for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False)
-        }
+        # Instituciones por uesvalle_ie_id (puede haber múltiples con mismo ID)
+        self.dict_instituciones_by_uesvalle = {}
+        for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False):
+            if inst.uesvalle_ie_id not in self.dict_instituciones_by_uesvalle:
+                self.dict_instituciones_by_uesvalle[inst.uesvalle_ie_id] = []
+            self.dict_instituciones_by_uesvalle[inst.uesvalle_ie_id].append(str(inst.id))
+        
+        # Mapeo por clave compuesta (uesvalle_ie_id + nombre normalizado) -> UUID
+        # Esta es la clave real para identificar instituciones únicas
+        self.dict_instituciones_by_key = {}
+        for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False):
+            key = self._make_inst_key(inst.uesvalle_ie_id, inst.nombre)
+            self.dict_instituciones_by_key[key] = str(inst.id)
         
         # Sedes por DANE
         self.dict_sedes_by_dane = {
@@ -431,9 +440,17 @@ class MySQLCSVSyncProcessor:
                 self.dict_sedes_by_institucion[inst_id] = []
             self.dict_sedes_by_institucion[inst_id].append(str(sede.id))
         
-        logger.info(f"📚 Diccionarios cargados: {len(self.dict_instituciones_by_dane)} IEs (DANE), "
-                   f"{len(self.dict_instituciones_by_uesvalle)} IEs (UESValle), "
+        logger.info(f"📚 Diccionarios cargados: {len(self.dict_instituciones_by_key)} IEs (clave compuesta), "
                    f"{len(self.dict_sedes_by_dane)} Sedes")
+    
+    def _make_inst_key(self, uesvalle_id: str, nombre: str) -> str:
+        """
+        Crea una clave única para identificar instituciones.
+        Combina uesvalle_ie_id + nombre normalizado.
+        """
+        uesvalle_id = str(uesvalle_id).strip().upper() if uesvalle_id else ''
+        nombre = str(nombre).strip().upper() if nombre else ''
+        return f"{uesvalle_id}|{nombre}"
     
     # =========================================================================
     # FASE 1: SINCRONIZACIÓN DE INSTITUCIONES
@@ -443,17 +460,16 @@ class MySQLCSVSyncProcessor:
         """
         Sincroniza instituciones MySQL + CSV según instructivo.
         
-        Estrategia:
+        Estrategia CORREGIDA:
+          - Cada fila de MySQL con identificacion + nombre único = 1 institución
+          - NO deduplicar solo por identificacion (hay instituciones con mismo código pero diferente nombre)
           - MySQL.identificacion SIEMPRE → uesvalle_ie_id
           - SI MySQL tiene codigodane Y existe en CSV → Enriquece
-          - SI MySQL tiene codigodane pero NO en CSV → Solo MySQL
-          - SI MySQL NO tiene codigodane → Solo MySQL (genera UUID)
         """
         if self.df_mysql is None:
             logger.warning("⚠️ No hay datos de MySQL cargados")
             return
         
-        # Obtener instituciones únicas de MySQL (por identificacion)
         col_identificacion = 'identificacion'
         col_codigodane = 'codigodane'
         
@@ -461,10 +477,28 @@ class MySQLCSVSyncProcessor:
             logger.error(f"❌ Columna '{col_identificacion}' no encontrada en MySQL")
             return
         
-        # Agrupar por identificacion (puede haber múltiples visitas por institución)
-        instituciones_mysql = self.df_mysql.drop_duplicates(subset=[col_identificacion])
+        # Buscar columna de nombre (puede variar)
+        col_nombre = None
+        for possible_name in ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial']:
+            if possible_name in self.df_mysql.columns:
+                col_nombre = possible_name
+                break
         
-        logger.info(f"📋 Procesando {len(instituciones_mysql)} instituciones únicas de MySQL...")
+        if not col_nombre:
+            logger.warning("⚠️ No se encontró columna de nombre, usando solo identificacion")
+            col_nombre = col_identificacion
+        
+        # CLAVE: Deduplicar por identificacion + nombre (clave compuesta)
+        # Esto permite tener "POLICARPA BACHILLER" y "POLICARPA PRIMARIA" con mismo código
+        subset_cols = [col_identificacion]
+        if col_nombre != col_identificacion:
+            subset_cols.append(col_nombre)
+        
+        instituciones_mysql = self.df_mysql.drop_duplicates(subset=subset_cols)
+        
+        logger.info(f"📋 Procesando {len(instituciones_mysql)} instituciones únicas de MySQL ")
+        logger.info(f"   (deduplicadas por: {subset_cols})")
+        logger.info(f"   Total filas MySQL: {len(self.df_mysql)}")
         
         for idx, row in instituciones_mysql.iterrows():
             try:
@@ -493,11 +527,10 @@ class MySQLCSVSyncProcessor:
                         logger.debug(f"✓ Institución enriquecida con CSV: {inst_data['nombre']}")
                     else:
                         self.metrics.inst_sin_coincidencia_dane += 1
-                        logger.debug(f"⚠️ DANE {codigodane} no encontrado en CSV, usando solo MySQL")
                 else:
                     self.metrics.inst_sin_coincidencia_dane += 1
                 
-                # Guardar institución
+                # Guardar institución usando clave compuesta
                 created = self._save_institucion(inst_data)
                 
                 if created:
@@ -518,8 +551,9 @@ class MySQLCSVSyncProcessor:
     def _prepare_institucion_from_mysql(self, row: pd.Series, uesvalle_id: str, codigodane: Optional[str]) -> Dict[str, Any]:
         """Prepara datos de institución desde MySQL."""
         # Buscar nombre de institución (puede estar en diferentes columnas)
+        # IMPORTANTE: nombreestablecimiento es la columna principal en MySQL
         nombre = None
-        for col in ['nombre', 'nombreinstitucion', 'nombre_institucion', 'razonsocial']:
+        for col in ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial']:
             if col in row.index and pd.notna(row.get(col)):
                 nombre = str(row[col]).strip()
                 break
@@ -577,49 +611,55 @@ class MySQLCSVSyncProcessor:
     
     def _save_institucion(self, data: Dict[str, Any]) -> bool:
         """
-        Guarda institución usando update_or_create.
+        Guarda institución usando clave compuesta (uesvalle_ie_id + nombre).
         
-        Clave única:
-          - Si tiene dane_ie_id → busca por dane_ie_id
-          - Si no tiene dane_ie_id → busca por uesvalle_ie_id
+        IMPORTANTE: Hay instituciones con el mismo código (uesvalle_ie_id o dane_ie_id)
+        pero diferente nombre (ej: PRIMARIA vs BACHILLER). Por eso usamos
+        uesvalle_ie_id + nombre como clave compuesta.
         
         Returns:
             bool: True si fue creada, False si fue actualizada
         """
         try:
-            if data.get('dane_ie_id'):
-                # Buscar por DANE primero
-                obj, created = Institucion.objects.update_or_create(
-                    dane_ie_id=data['dane_ie_id'],
-                    defaults={
-                        'nombre': data['nombre'],
-                        'uesvalle_ie_id': data['uesvalle_ie_id'],
-                        'codigo_municipio': data.get('codigo_municipio'),
-                        'direccion': data.get('direccion'),
-                        'telefono': data.get('telefono'),
-                        'email': data.get('email'),
-                        'estado': data.get('estado', 'ACTIVA'),
-                        'metadata': data.get('metadata', {})
-                    }
-                )
-            else:
-                # Sin DANE, buscar por uesvalle_ie_id
-                obj, created = Institucion.objects.update_or_create(
-                    uesvalle_ie_id=data['uesvalle_ie_id'],
-                    defaults={
-                        'nombre': data['nombre'],
-                        'codigo_municipio': data.get('codigo_municipio'),
-                        'direccion': data.get('direccion'),
-                        'telefono': data.get('telefono'),
-                        'email': data.get('email'),
-                        'estado': data.get('estado', 'ACTIVA'),
-                        'metadata': data.get('metadata', {})
-                    }
-                )
+            # Normalizar nombre para búsqueda
+            nombre_normalizado = str(data['nombre']).strip()
+            uesvalle_id = str(data['uesvalle_ie_id']).strip()
             
-            action = "creada" if created else "actualizada"
-            logger.debug(f"✓ Institución {action}: {data['nombre']} (DANE: {data.get('dane_ie_id')}, UESValle: {data['uesvalle_ie_id']})")
-            return created
+            # Buscar institución existente por clave compuesta (uesvalle_ie_id + nombre)
+            existing = Institucion.objects.filter(
+                uesvalle_ie_id=uesvalle_id,
+                nombre__iexact=nombre_normalizado
+            ).first()
+            
+            if existing:
+                # Actualizar institución existente
+                existing.dane_ie_id = data.get('dane_ie_id') or existing.dane_ie_id
+                existing.codigo_municipio = data.get('codigo_municipio') or existing.codigo_municipio
+                existing.direccion = data.get('direccion') or existing.direccion
+                existing.telefono = data.get('telefono') or existing.telefono
+                existing.email = data.get('email') or existing.email
+                existing.estado = data.get('estado', 'ACTIVA')
+                existing.metadata = data.get('metadata', {})
+                existing.save()
+                
+                logger.debug(f"✓ Institución actualizada: {nombre_normalizado} (UESValle: {uesvalle_id})")
+                return False
+            else:
+                # Crear nueva institución
+                Institucion.objects.create(
+                    nombre=nombre_normalizado,
+                    uesvalle_ie_id=uesvalle_id,
+                    dane_ie_id=data.get('dane_ie_id'),
+                    codigo_municipio=data.get('codigo_municipio'),
+                    direccion=data.get('direccion'),
+                    telefono=data.get('telefono'),
+                    email=data.get('email'),
+                    estado=data.get('estado', 'ACTIVA'),
+                    metadata=data.get('metadata', {})
+                )
+                
+                logger.debug(f"✓ Institución creada: {nombre_normalizado} (UESValle: {uesvalle_id})")
+                return True
             
         except Exception as e:
             logger.error(f"❌ Error guardando institución {data.get('nombre')}: {e}")
@@ -810,23 +850,41 @@ class MySQLCSVSyncProcessor:
         """
         Encuentra UUID de institución para una visita.
         
+        IMPORTANTE: Usamos la clave compuesta (identificacion + nombre) para encontrar
+        la institución correcta, ya que puede haber instituciones con el mismo código
+        pero diferente nombre.
+        
         Orden de búsqueda:
-          1. MySQL.codigodane → institucion.dane_ie_id
-          2. MySQL.identificacion → institucion.uesvalle_ie_id
+          1. Clave compuesta: identificacion + nombre → institución exacta
+          2. Fallback: Solo identificacion → primer resultado (si hay múltiples)
         """
-        # Intentar por codigodane
-        codigodane = self._get_value(row, ['codigodane', 'codigo_dane', 'dane'])
-        if codigodane and codigodane.upper() not in ['NAN', 'NONE', '']:
-            uuid_found = self.dict_instituciones_by_dane.get(codigodane.upper())
+        # Obtener identificacion y nombre de la fila MySQL
+        identificacion = self._get_value(row, ['identificacion', 'uesvalle_ie_id', 'id_institucion'])
+        nombre = self._get_value(row, ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial'])
+        
+        if not identificacion or identificacion.upper() in ['NAN', 'NONE', '']:
+            return None
+        
+        # 1. Buscar por clave compuesta (identificacion + nombre)
+        if nombre:
+            key = self._make_inst_key(identificacion, nombre)
+            uuid_found = self.dict_instituciones_by_key.get(key)
             if uuid_found:
                 return uuid_found
         
-        # Intentar por identificacion (uesvalle_ie_id)
-        identificacion = self._get_value(row, ['identificacion', 'uesvalle_ie_id', 'id_institucion'])
-        if identificacion and identificacion.upper() not in ['NAN', 'NONE', '']:
-            uuid_found = self.dict_instituciones_by_uesvalle.get(identificacion)
-            if uuid_found:
-                return uuid_found
+        # 2. Fallback: buscar solo por identificacion (retorna el primero si hay múltiples)
+        uuids_by_uesvalle = self.dict_instituciones_by_uesvalle.get(identificacion.strip())
+        if uuids_by_uesvalle and len(uuids_by_uesvalle) > 0:
+            if len(uuids_by_uesvalle) > 1:
+                logger.warning(f"⚠️ Múltiples instituciones con identificacion={identificacion}, usando la primera")
+            return uuids_by_uesvalle[0]
+        
+        # 3. Fallback: intentar por codigodane
+        codigodane = self._get_value(row, ['codigodane', 'codigo_dane', 'dane'])
+        if codigodane and codigodane.upper() not in ['NAN', 'NONE', '']:
+            uuids_by_dane = self.dict_instituciones_by_dane.get(codigodane.upper())
+            if uuids_by_dane and len(uuids_by_dane) > 0:
+                return uuids_by_dane[0]
         
         return None
     

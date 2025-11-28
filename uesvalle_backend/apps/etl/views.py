@@ -686,3 +686,26 @@ class NotificationViewSet(viewsets.ViewSet):
             return Response({'status': 'success'})
         except Notification.DoesNotExist:
             return Response({'status': 'error', 'message': 'Not found'}, status=404)
+
+    @action(detail=True, methods=['delete'])
+    def delete_notification(self, request, pk=None):
+        """
+        Elimina una notificación específica.
+        """
+        try:
+            notification = Notification.objects.get(pk=pk)
+            notification.delete()
+            return Response({'status': 'success', 'message': 'Notification deleted'})
+        except Notification.DoesNotExist:
+            return Response({'status': 'error', 'message': 'Not found'}, status=404)
+
+    @action(detail=False, methods=['delete'], url_path='delete-all')
+    def delete_all(self, request):
+        """
+        Elimina todas las notificaciones no leídas.
+        """
+        deleted_count = Notification.objects.filter(is_read=False).delete()[0]
+        return Response({
+            'status': 'success',
+            'message': f'{deleted_count} notifications deleted'
+        })

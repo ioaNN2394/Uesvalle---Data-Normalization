@@ -328,9 +328,11 @@ class ETLOrchestrator:
                 if self._is_mysql_data(df) or 'MySQL' in filename:
                     mysql_files.append(transformation)
                     logger.info(f"  📊 MySQL data: {filename} ({len(df)} registros)")
+                    logger.info(f"     Columnas MySQL: {list(df.columns)[:15]}...")  # DEBUG
                 else:
                     csv_files.append(transformation)
                     logger.info(f"  📄 CSV data: {filename} ({len(df)} registros)")
+                    logger.info(f"     Columnas CSV: {list(df.columns)[:15]}...")  # DEBUG
             
             # =========================================================
             # PASO 1: Indexar CSV por CODIGODANE (para coordenadas)
@@ -457,32 +459,62 @@ class ETLOrchestrator:
         """
         BULK crear/actualizar instituciones desde MySQL + enriquecer con CSV.
         
+        IMPORTANTE: Hay instituciones con el mismo código (identificacion) pero 
+        diferente nombre. Por eso usamos identificacion + nombre como clave compuesta.
+        
         Returns:
             (created_count, updated_count)
         """
         BATCH_SIZE = 500
         
-        # 1. Obtener instituciones únicas de MySQL
+        # 1. Obtener instituciones únicas de MySQL (por identificacion + nombre)
         if 'identificacion' not in df_mysql.columns:
             logger.warning("No hay columna 'identificacion' en MySQL")
             return (0, 0)
         
-        df_unique = df_mysql.drop_duplicates(subset=['identificacion'])
-        logger.info(f"   Instituciones únicas a procesar: {len(df_unique)}")
+        # DEBUG: Mostrar todas las columnas disponibles
+        logger.info(f"   DEBUG - Columnas en df_mysql: {list(df_mysql.columns)}")
         
-        # 2. Cargar instituciones existentes en memoria (por uesvalle_ie_id y dane_ie_id)
-        existing_by_uesvalle = {
-            inst.uesvalle_ie_id: inst 
-            for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False)
-        }
-        existing_by_dane = {
-            inst.dane_ie_id: inst 
-            for inst in Institucion.objects.filter(dane_ie_id__isnull=False)
-        }
+        # Buscar columna de nombre
+        col_nombre = None
+        for possible_name in ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial']:
+            if possible_name in df_mysql.columns:
+                col_nombre = possible_name
+                logger.info(f"   DEBUG - Columna de nombre encontrada: {col_nombre}")
+                break
         
-        logger.info(f"   Existentes: {len(existing_by_uesvalle)} por UESValle, {len(existing_by_dane)} por DANE")
+        if not col_nombre:
+            logger.warning(f"   ⚠️ NO se encontró columna de nombre. Buscando por similitud...")
+            # Intentar buscar por similitud
+            for col in df_mysql.columns:
+                if 'nombre' in col.lower() or 'establecimiento' in col.lower():
+                    col_nombre = col
+                    logger.info(f"   DEBUG - Columna de nombre encontrada por similitud: {col_nombre}")
+                    break
         
-        # Log columns for debugging
+        # CLAVE: Deduplicar por identificacion + nombre (clave compuesta)
+        subset_cols = ['identificacion']
+        if col_nombre:
+            subset_cols.append(col_nombre)
+        else:
+            logger.error("   ❌ CRÍTICO: No se puede encontrar columna de nombre - se deduplicará solo por identificacion!")
+        
+        df_unique = df_mysql.drop_duplicates(subset=subset_cols)
+        logger.info(f"   Instituciones únicas a procesar: {len(df_unique)} (deduplicadas por: {subset_cols})")
+        logger.info(f"   Total filas MySQL: {len(df_mysql)}")
+        
+        # 2. Cargar instituciones existentes por clave compuesta (uesvalle_ie_id + nombre)
+        def make_key(uesvalle_id, nombre):
+            u = str(uesvalle_id).strip().upper() if uesvalle_id else ''
+            n = str(nombre).strip().upper() if nombre else ''
+            return f"{u}|{n}"
+        
+        existing_by_key = {}
+        for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False):
+            key = make_key(inst.uesvalle_ie_id, inst.nombre)
+            existing_by_key[key] = inst
+        
+        logger.info(f"   Existentes: {len(existing_by_key)} por clave compuesta")
         logger.info(f"   Columnas disponibles en MySQL: {list(df_mysql.columns)}")
 
         to_create = []
@@ -502,7 +534,6 @@ class ETLOrchestrator:
             
             # Buscar nombre
             nombre = None
-            # Prioridad según esquema MySQL: nombreestablecimiento
             for col in ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial', 'establecimiento', 'institucion']:
                 if col in row.index and pd.notna(row.get(col)):
                     nombre = str(row[col]).strip()
@@ -514,7 +545,6 @@ class ETLOrchestrator:
             lat, lon = None, None
             if codigodane and codigodane in csv_by_dane:
                 csv_row = csv_by_dane[codigodane]
-                # Buscar columnas de coordenadas
                 for lat_col in ['LATITUD', 'LAT', 'LATITUDE']:
                     if lat_col in csv_row.index:
                         lat = self._parse_coordinate(csv_row.get(lat_col))
@@ -524,14 +554,12 @@ class ETLOrchestrator:
                         lon = self._parse_coordinate(csv_row.get(lon_col))
                         break
             
-            # Verificar si existe
-            existing = existing_by_uesvalle.get(uesvalle_id)
-            if not existing and codigodane:
-                existing = existing_by_dane.get(codigodane)
+            # Verificar si existe usando clave compuesta
+            key = make_key(uesvalle_id, nombre)
+            existing = existing_by_key.get(key)
             
             if existing:
                 # Actualizar
-                existing.nombre = nombre
                 existing.uesvalle_ie_id = uesvalle_id
                 if codigodane:
                     existing.dane_ie_id = codigodane
@@ -573,7 +601,7 @@ class ETLOrchestrator:
                 batch = to_update[i:i+BATCH_SIZE]
                 Institucion.objects.bulk_update(
                     batch, 
-                    ['nombre', 'uesvalle_ie_id', 'dane_ie_id', 'lat', 'lon', 'estado', 'metadata'],
+                    ['uesvalle_ie_id', 'dane_ie_id', 'lat', 'lon', 'estado', 'metadata'],
                     batch_size=BATCH_SIZE
                 )
                 updated_count += len(batch)
@@ -585,18 +613,32 @@ class ETLOrchestrator:
         """
         BULK crear/actualizar visitas desde MySQL.
         
+        IMPORTANTE: Usamos clave compuesta (uesvalle_ie_id + nombre) para encontrar
+        la institución correcta, ya que puede haber instituciones con el mismo código
+        pero diferente nombre.
+        
         Returns:
             (created_count, updated_count)
         """
         BATCH_SIZE = 500
         
-        # 1. Recargar diccionario de instituciones
-        inst_by_uesvalle = {
-            inst.uesvalle_ie_id: inst.id 
-            for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False)
-        }
+        # 1. Recargar diccionario de instituciones por clave compuesta
+        def make_key(uesvalle_id, nombre):
+            u = str(uesvalle_id).strip().upper() if uesvalle_id else ''
+            n = str(nombre).strip().upper() if nombre else ''
+            return f"{u}|{n}"
         
-        logger.info(f"   Instituciones disponibles: {len(inst_by_uesvalle)}")
+        inst_by_key = {}
+        inst_by_uesvalle = {}  # Fallback para instituciones sin nombre
+        for inst in Institucion.objects.filter(uesvalle_ie_id__isnull=False):
+            key = make_key(inst.uesvalle_ie_id, inst.nombre)
+            inst_by_key[key] = inst.id
+            # También mantener mapeo por uesvalle_ie_id (para fallback)
+            if inst.uesvalle_ie_id not in inst_by_uesvalle:
+                inst_by_uesvalle[inst.uesvalle_ie_id] = []
+            inst_by_uesvalle[inst.uesvalle_ie_id].append(inst.id)
+        
+        logger.info(f"   Instituciones disponibles: {len(inst_by_key)} (por clave compuesta)")
         
         # 2. Cargar visitas existentes (por clave única: institucion + fecha + programa)
         existing_visitas = {}
@@ -611,13 +653,31 @@ class ETLOrchestrator:
         skipped = 0
         
         for _, row in df_mysql.iterrows():
-            # Obtener institucion_id
+            # Obtener identificacion y nombre
             uesvalle_id = str(row.get('identificacion', '')).strip()
             if not uesvalle_id or uesvalle_id.lower() in ['nan', 'none', '']:
                 skipped += 1
                 continue
             
-            institucion_id = inst_by_uesvalle.get(uesvalle_id)
+            # Buscar nombre para clave compuesta
+            nombre = None
+            for col in ['nombreestablecimiento', 'nombreinstitucion', 'nombre_institucion', 'nombre', 'razonsocial']:
+                if col in row.index and pd.notna(row.get(col)):
+                    nombre = str(row[col]).strip()
+                    break
+            
+            # Buscar institucion por clave compuesta
+            institucion_id = None
+            if nombre:
+                key = make_key(uesvalle_id, nombre)
+                institucion_id = inst_by_key.get(key)
+            
+            # Fallback: buscar solo por uesvalle_ie_id
+            if not institucion_id:
+                uuids = inst_by_uesvalle.get(uesvalle_id, [])
+                if uuids:
+                    institucion_id = uuids[0]  # Usar el primero
+            
             if not institucion_id:
                 skipped += 1
                 continue
