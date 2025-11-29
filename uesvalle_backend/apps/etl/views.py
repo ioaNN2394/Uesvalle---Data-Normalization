@@ -462,6 +462,7 @@ class MapMarkersView(APIView):
     """
     Retorna todos los marcadores (sedes) para el mapa.
     GET /api/map/markers/
+    Incluye instituciones con y sin coordenadas cuando hay filtros aplicados.
     """
     permission_classes = [AllowAny]
     
@@ -473,28 +474,41 @@ class MapMarkersView(APIView):
             conceptos = request.query_params.get('conceptos', '') # F,D,FCR
             fecha_inicio = request.query_params.get('fecha_inicio', '')
             fecha_fin = request.query_params.get('fecha_fin', '')
+            include_all = request.query_params.get('include_all', 'false').lower() == 'true'
             
-            # Construir query base
+            # Query con subquery para obtener el concepto de la última visita
             sql = """
                 SELECT DISTINCT
                     i.id as institucion_id,
                     i.nombre as institucion,
                     i.dane_ie_id,
+                    i.uesvalle_ie_id,
                     i.email,
                     i.telefono,
                     i.direccion,
                     i.estado,
                     i.lat,
                     i.lon,
-                    i.codigo_municipio
+                    i.codigo_municipio,
+                    (
+                        SELECT v_inner.conceptovisita 
+                        FROM uesvalle.visita v_inner 
+                        WHERE v_inner.institucion_id = i.id 
+                        ORDER BY v_inner.fechavisita DESC 
+                        LIMIT 1
+                    ) as concepto_actual
                 FROM uesvalle.institucion i
             """
             
-            # Si hay filtros, hacer JOIN con visita
             params = []
-            where_clauses = ["i.lat IS NOT NULL", "i.lon IS NOT NULL"]
+            where_clauses = []
             
             has_filters = conceptos or (fecha_inicio and fecha_fin)
+            
+            # Solo requerir coordenadas si NO hay filtros aplicados y no se pide include_all
+            if not has_filters and not include_all:
+                where_clauses.append("i.lat IS NOT NULL")
+                where_clauses.append("i.lon IS NOT NULL")
             
             if has_filters:
                 sql += " INNER JOIN uesvalle.visita v ON i.id = v.institucion_id "
@@ -530,6 +544,8 @@ class MapMarkersView(APIView):
                     # Convierte Decimal a float para JSON
                     marker['lat'] = float(marker['lat']) if marker['lat'] is not None else None
                     marker['lon'] = float(marker['lon']) if marker['lon'] is not None else None
+                    # Indicador de si tiene ubicación en el mapa
+                    marker['has_location'] = marker['lat'] is not None and marker['lon'] is not None
                     # Agregar campo 'sede' vacío para compatibilidad temporal si es necesario
                     marker['sede'] = '' 
                     markers.append(marker)
