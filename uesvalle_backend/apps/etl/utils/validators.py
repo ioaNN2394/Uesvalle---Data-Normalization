@@ -89,6 +89,11 @@ class DepartmentValidator:
             # Elimina caracteres especiales
             dept_normalized = dept_normalized.replace(' ', '').replace('-', '')
             
+            # ⭐ RECHAZA si queda vacío después de normalizar
+            if not dept_normalized:
+                logger.debug(f"✗ Rechazado: Nombre vacío después de normalizar")
+                return False
+            
             # ⭐ RECHAZA "CAUCA" solo (es Cauca, no Valle del Cauca)
             if dept_normalized == 'CAUCA':
                 logger.debug(f"✗ Rechazado: 'CAUCA' solo (ese es el departamento de Cauca, no Valle del Cauca)")
@@ -200,11 +205,11 @@ class VisitaValidator:
             import pandas as pd
             from datetime import date, datetime
             
-            if isinstance(value, date):
-                return True, value, None
-            
             if isinstance(value, datetime):
                 return True, value.date(), None
+            
+            if isinstance(value, date):
+                return True, value, None
             
             # Intentar parsear string
             parsed = pd.to_datetime(value, errors='coerce')

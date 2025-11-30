@@ -158,8 +158,8 @@ class VisitaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Visita
         fields = [
-            'id', 'sede_id', 'institucion_id', 'fecha', 'programa',
-            'resultado', 'observaciones', 'metadata',
+            'id', 'sede_id', 'institucion_id', 'fechavisita', 'programa',
+            'resultado', 'observacion', 'metadata',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

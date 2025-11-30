@@ -1,41 +1,22 @@
-"""
-URL configuration for uesvalle_backend project.
+"""uesvalle_backend URL Configuration
 
-Sistema ETL para normalización de datos educativos UESVALLE.
-Integra MySQL + Excel → normaliza → carga en Supabase (Postgres).
+The `urlpatterns` list routes URLs to views. For more information please see:
+    https://docs.djangoproject.com/en/4.2/topics/http/urls/
+Examples:
+Function views
+    1. Add an import:  from my_app import views
+    2. Add a URL to urlpatterns:  path('', views.home, name='home')
+Class-based views
+    1. Add an import:  from other_app.views import Home
+    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
+Including another URLconf
+    1. Import the include() function: from django.urls import include, path
+    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse
-from django.views.decorators.http import require_http_methods
-
-
-@require_http_methods(["GET"])
-def api_root(request):
-    """Root endpoint de la API."""
-    return JsonResponse({
-        'message': 'API ETL UESVALLE - Sistema de Normalización de Datos Educativos',
-        'version': '1.0.0',
-        'endpoints': {
-            'etl': '/api/etl/',
-            'reports': '/api/reports/',
-            'admin': '/admin/',
-            'health': '/api/etl/health/',
-            'docs': '/api/docs/' if hasattr(request, 'build_absolute_uri') else None
-        }
-    })
-
 
 urlpatterns = [
-    # Admin
     path('admin/', admin.site.urls),
-    
-    # API Root
-    path('api/', api_root, name='api-root'),
-    
-    # ETL Module
-    path('api/etl/', include('apps.etl.urls')),
-    
-    # Reports Module
-    path('api/reports/', include('apps.reports.urls')),
+    path('api/', include('apps.etl.urls')),
 ]

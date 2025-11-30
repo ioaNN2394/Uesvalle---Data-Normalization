@@ -102,9 +102,9 @@ def transformar_maestras_csv(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
             'dane_ie_id': df_inst_unique['codigo_dane_ie'].astype(str).str.strip(),
             'nombre': df_inst_unique['nombre_institucion'].astype(str).str.strip(),
             'codigo_municipio': df_inst_unique['codigo_municipio'].astype(str).str.strip() if 'codigo_municipio' in df_inst_unique else None,
-            'direccion': df_inst_unique['direccion'].fillna(None) if 'direccion' in df_inst_unique else None,
-            'telefono': df_inst_unique['telefono'].fillna(None) if 'telefono' in df_inst_unique else None,
-            'email': df_inst_unique['email'].fillna(None) if 'email' in df_inst_unique else None,
+            'direccion': df_inst_unique['direccion'].where(df_inst_unique['direccion'].notna(), None) if 'direccion' in df_inst_unique else None,
+            'telefono': df_inst_unique['telefono'].where(df_inst_unique['telefono'].notna(), None) if 'telefono' in df_inst_unique else None,
+            'email': df_inst_unique['email'].where(df_inst_unique['email'].notna(), None) if 'email' in df_inst_unique else None,
             'estado': df_inst_unique['estado'].fillna('ACTIVA') if 'estado' in df_inst_unique else 'ACTIVA',
             'metadata': df_inst_unique.apply(
                 lambda row: {
