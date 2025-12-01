@@ -50,15 +50,29 @@
             </div>
           </div>
 
-          <!-- Fecha -->
+          <!-- Rango de Fechas -->
           <div class="modal-field">
-            <label class="modal-label">Fecha</label>
+            <label class="modal-label">Fecha Inicio</label>
             <div class="modal-input-group">
               <input
                 class="modal-input"
                 placeholder="YYYY-MM-DD o dejar en blanco"
-                v-model="form.fecha"
+                v-model="form.fechaInicio"
                 type="date"
+                :max="today"
+              />
+            </div>
+          </div>
+
+          <div class="modal-field">
+            <label class="modal-label">Fecha Fin</label>
+            <div class="modal-input-group">
+              <input
+                class="modal-input"
+                placeholder="YYYY-MM-DD o dejar en blanco"
+                v-model="form.fechaFin"
+                type="date"
+                :max="today"
               />
             </div>
           </div>
@@ -172,6 +186,18 @@
           <button v-if="!isGenerating" @click="closeStatus" class="btn-close-status">Cerrar</button>
         </div>
       </div>
+
+      <!-- Modal de Confirmación -->
+      <div v-if="showConfirmModal" class="confirmation-overlay">
+        <div class="confirmation-modal">
+          <h3 class="confirmation-title">Confirmar Generación de Reporte</h3>
+          <p class="confirmation-message">{{ confirmationMessage }}</p>
+          <div class="confirmation-actions">
+            <button @click="cancelGeneration" class="btn-cancel">No, cancelar</button>
+            <button @click="confirmGeneration" class="btn-confirm">Sí, generar reporte</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -186,6 +212,15 @@ import pdfIcon from '@/assets/icons/pdf.png'
 const emit = defineEmits(['close'])
 const close = () => emit('close')
 
+// Calcular fecha de hoy para limitar el máximo de las fechas
+const today = computed(() => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+})
+
 // Estado de generación
 const isGenerating = ref(false)
 const generationProgress = ref(0)
@@ -193,6 +228,10 @@ const reportStatus = ref<'success' | 'error' | null>(null)
 const errorMessage = ref('')
 const currentTaskId = ref('')
 const validationWarning = ref('')
+const showConfirmModal = ref(false)
+const pendingFormat = ref<'excel' | 'pdf' | null>(null)
+const pendingFilters = ref<any>(null)
+const confirmationMessage = ref('')
 
 // Dropdowns
 const showMunicipioDropdown = ref(false)
@@ -206,7 +245,8 @@ const institucionOptions = ref<Array<{ id: string; nombre: string; dane: string 
 const form = reactive({
   municipio: '',
   conceptoVisita: '',
-  fecha: '',
+  fechaInicio: '',
+  fechaFin: '',
   institucion: '',
   estado: '',
   tienePae: ''
@@ -315,33 +355,50 @@ const validateFilters = async () => {
 
 // Función principal de generación de reporte
 const generateReport = async (format: 'excel' | 'pdf') => {
-  isGenerating.value = true
-  generationProgress.value = 0
-  reportStatus.value = null
-  errorMessage.value = ''
-
   // Preparar filtros para el backend
   const filters: any = {
     municipios: form.municipio ? [form.municipio] : [],
     conceptos_visita: form.conceptoVisita ? [form.conceptoVisita] : [],
-    anios: form.fecha ? [new Date(form.fecha).getFullYear()] : [],
+    fecha_inicio: form.fechaInicio ? form.fechaInicio : null,
+    fecha_fin: form.fechaFin ? form.fechaFin : null,
     instituciones: form.institucion ? [form.institucion] : [],
     estados: form.estado ? [form.estado] : [],
     tiene_pae: form.tienePae === 'SI' ? true : form.tienePae === 'NO' ? false : null
   }
+
+  // Si no hay filtros y no hay confirmación previa, mostrar modal de confirmación
+  if (!form.municipio && !form.conceptoVisita && !form.fechaInicio && !form.fechaFin && 
+      !form.institucion && !form.estado && !form.tienePae) {
+    // Hacer una consulta previa para obtener el count
+    try {
+      const response = await axios.post(buildApiUrl('/api/reports/generate/'), {
+        format: format,
+        filters: filters,
+        dry_run: true
+      })
+
+      if (response.data.action_required) {
+        showConfirmModal.value = true
+        confirmationMessage.value = response.data.warning || `No has seleccionado ningún filtro. Se generará un reporte de las ${response.data.total_count || 'muchas'} instituciones. ¿Deseas continuar?`
+        pendingFormat.value = format
+        pendingFilters.value = filters
+        return
+      }
+    } catch (error) {
+      console.error('Error verificando filtros:', error)
+    }
+  }
+
+  isGenerating.value = true
+  generationProgress.value = 0
+  reportStatus.value = null
+  errorMessage.value = ''
 
   try {
     const response = await axios.post(buildApiUrl('/api/reports/generate/'), {
       format: format,
       filters: filters
     })
-
-    if (response.data.action_required) {
-      // Mostrar advertencia de muchos registros
-      validationWarning.value = response.data.warning
-      isGenerating.value = false
-      return
-    }
 
     if (response.data.task_id) {
       currentTaskId.value = response.data.task_id
@@ -365,6 +422,60 @@ const generateReport = async (format: 'excel' | 'pdf') => {
   }
 }
 
+// Confirmar generación después de modal
+const confirmGeneration = async () => {
+  if (!pendingFormat.value || !pendingFilters.value) {
+    return
+  }
+
+  showConfirmModal.value = false
+  isGenerating.value = true
+  generationProgress.value = 0
+  reportStatus.value = null
+  errorMessage.value = ''
+
+  try {
+    const response = await axios.post(buildApiUrl('/api/reports/generate/'), {
+      format: pendingFormat.value,
+      filters: pendingFilters.value,
+      confirm: true
+    })
+
+    if (response.data.task_id) {
+      currentTaskId.value = response.data.task_id
+      checkReportStatus(response.data.task_id)
+    } else {
+      reportStatus.value = 'error'
+      errorMessage.value = 'No se recibió un ID de tarea del servidor'
+      isGenerating.value = false
+    }
+  } catch (error: any) {
+    console.error('Error generando reporte:', error)
+    isGenerating.value = false
+    reportStatus.value = 'error'
+    
+    if (error.response?.data?.error?.includes('no data') || error.response?.status === 400) {
+      errorMessage.value = 'No se encontraron datos que coincidan con los filtros seleccionados. Por favor, verifica tus filtros.'
+    } else if (error.code === 'ERR_NETWORK') {
+      errorMessage.value = 'No se puede conectar al servidor'
+    } else if (error.response?.status === 500) {
+      errorMessage.value = `Error en el servidor: ${error.response.data?.detail || 'Error desconocido'}`
+    } else {
+      errorMessage.value = error.response?.data?.error || 'Error al iniciar la generación del reporte'
+    }
+  } finally {
+    pendingFormat.value = null
+    pendingFilters.value = null
+  }
+}
+
+// Cancelar confirmación
+const cancelGeneration = () => {
+  showConfirmModal.value = false
+  pendingFormat.value = null
+  pendingFilters.value = null
+}
+
 // Verificar estado del reporte (polling)
 const checkReportStatus = async (taskId: string, attempt = 0) => {
   if (attempt > 300) {
@@ -377,6 +488,8 @@ const checkReportStatus = async (taskId: string, attempt = 0) => {
   try {
     const response = await axios.get(buildApiUrl(`/api/reports/status/${taskId}/`))
     const data = response.data
+
+    console.log('Report status response:', data)
 
     if (data.status === 'processing' || data.status === 'pending') {
       generationProgress.value = data.progress || Math.min(attempt * 2, 90)
@@ -396,10 +509,20 @@ const checkReportStatus = async (taskId: string, attempt = 0) => {
       isGenerating.value = false
       reportStatus.value = 'error'
       errorMessage.value = data.error || 'Error desconocido'
+    } else {
+      // Status desconocido, reintentar
+      window.setTimeout(() => checkReportStatus(taskId, attempt + 1), 1000)
     }
-  } catch (error) {
+  } catch (error: any) {
+    console.error('Error checking report status:', error)
     // Reintentar en caso de error de red
-    window.setTimeout(() => checkReportStatus(taskId, attempt + 1), 2000)
+    if (attempt < 300) {
+      window.setTimeout(() => checkReportStatus(taskId, attempt + 1), 2000)
+    } else {
+      isGenerating.value = false
+      reportStatus.value = 'error'
+      errorMessage.value = 'Error al verificar el estado del reporte'
+    }
   }
 }
 
@@ -715,5 +838,81 @@ loadInstituciones()
 
 .btn-close-status:hover {
   background: #4f46e5;
+}
+
+/* Confirmation Modal */
+.confirmation-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.confirmation-modal {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 20px 25px rgba(0, 0, 0, 0.2);
+  padding: 32px;
+  max-width: 500px;
+  width: 90%;
+  text-align: center;
+}
+
+.confirmation-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 16px 0;
+}
+
+.confirmation-message {
+  font-size: 16px;
+  color: #374151;
+  line-height: 1.5;
+  margin: 0 0 24px 0;
+}
+
+.confirmation-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btn-cancel {
+  padding: 10px 24px;
+  background: #e5e7eb;
+  color: #374151;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.btn-cancel:hover {
+  background: #d1d5db;
+}
+
+.btn-confirm {
+  padding: 10px 24px;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.btn-confirm:hover {
+  background: #059669;
 }
 </style>

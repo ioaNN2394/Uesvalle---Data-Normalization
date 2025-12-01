@@ -180,7 +180,8 @@ class GenerateReportView(APIView):
             "filters": {
                 "municipios": ["nombre1", "nombre2"],
                 "conceptos_visita": ["F", "D", "FCR"],
-                "anios": [2023, 2024],
+                "fecha_inicio": "2023-01-01",
+                "fecha_fin": "2024-12-31",
                 "instituciones": ["nombre1", "nombre2"],
                 "estados": ["ACTIVA", "CIERRE TEMPORAL"],
                 "tiene_pae": true | false | null
@@ -204,7 +205,9 @@ class GenerateReportView(APIView):
                 anios=filters_config.get('anios', []),
                 instituciones=filters_config.get('instituciones', []),
                 estados=filters_config.get('estados', []),
-                tiene_pae=filters_config.get('tiene_pae')
+                tiene_pae=filters_config.get('tiene_pae'),
+                fecha_inicio=filters_config.get('fecha_inicio'),
+                fecha_fin=filters_config.get('fecha_fin')
             )
             
             # Obtener total de instituciones que coinciden

@@ -698,6 +698,14 @@ class NotificationViewSet(viewsets.ViewSet):
     """
     permission_classes = [AllowAny]
 
+    def list(self, request):
+        """
+        Lista todas las notificaciones.
+        """
+        notifications = Notification.objects.all().order_by('-created_at')
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+
     @action(detail=False, methods=['post'], url_path='check-updates')
     def check_updates(self, request):
         """
@@ -732,6 +740,19 @@ class NotificationViewSet(viewsets.ViewSet):
         try:
             notification = Notification.objects.get(pk=pk)
             notification.is_read = True
+            notification.save()
+            return Response({'status': 'success'})
+        except Notification.DoesNotExist:
+            return Response({'status': 'error', 'message': 'Not found'}, status=404)
+
+    @action(detail=True, methods=['post'], url_path='mark_unread')
+    def mark_unread(self, request, pk=None):
+        """
+        Marca una notificación como no leída.
+        """
+        try:
+            notification = Notification.objects.get(pk=pk)
+            notification.is_read = False
             notification.save()
             return Response({'status': 'success'})
         except Notification.DoesNotExist:

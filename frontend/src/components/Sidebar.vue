@@ -167,12 +167,25 @@
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
             <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
           </svg>
-          <h3>Notificaciones{{ unreadCount > 0 ? ` (${unreadCount})` : '' }}</h3>
+          <h3>{{ showReadNotifications ? 'Todas las notificaciones' : `Notificaciones${unreadCount > 0 ? ` (${unreadCount})` : ''}` }}</h3>
         </div>
         <button @click="showNotifications = false" class="close-btn" aria-label="Cerrar notificaciones">✕</button>
       </div>
-      <div v-if="notifications.length > 0" class="notification-actions">
-        <button @click="openConfirmDeleteAll" class="btn-delete-all">Eliminar todas las notificaciones</button>
+      <div class="notification-actions">
+        <button @click="showReadNotifications = !showReadNotifications; fetchNotifications()" class="btn-toggle-read" :title="showReadNotifications ? 'Ver solo no leídas' : 'Ver todas (incluidas leídas)'">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <template v-if="!showReadNotifications">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </template>
+            <template v-else>
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+              <line x1="1" y1="1" x2="23" y2="23"/>
+            </template>
+          </svg>
+          {{ showReadNotifications ? 'No leídas' : 'Todas' }}
+        </button>
+        <button v-if="notifications.length > 0" @click="openConfirmDeleteAll" class="btn-delete-all">Eliminar todas las notificaciones</button>
       </div>
       <div v-if="loadingNotifications" class="loading-state">
         <div class="skeleton" v-for="i in 3" :key="i">
@@ -205,11 +218,19 @@
           :class="{ unread: !notif.is_read }"
         >
           <div class="unread-indicator" v-if="!notif.is_read"></div>
-          <button @click.stop="deleteNotification(notif.id)" class="delete-notif-btn" title="Eliminar notificación" aria-label="Eliminar notificación">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/>
-            </svg>
-          </button>
+          <div class="notif-buttons">
+            <button v-if="showReadNotifications && notif.is_read" @click.stop="markAsUnread(notif)" class="unread-notif-btn" title="Marcar como no leída" aria-label="Marcar como no leída">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12a7 7 0 1 0-14 0 7 7 0 0 0 14 0z"/>
+                <path d="M12 6v6l4 2"/>
+              </svg>
+            </button>
+            <button @click.stop="deleteNotification(notif.id)" class="delete-notif-btn" title="Eliminar notificación" aria-label="Eliminar notificación">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/>
+              </svg>
+            </button>
+          </div>
           <div @click="markAsRead(notif)" @keydown.enter="markAsRead(notif)" @keydown.space.prevent="markAsRead(notif)" class="notif-content" tabindex="0" role="button" :aria-label="`Notificación de ${notif.institucion_nombre}: ${notif.old_concept || 'N/A'} → ${notif.new_concept}`">
             <div class="notif-title">{{ notif.institucion_nombre }}</div>
             <div class="notif-codes">DANE: {{ notif.institucion_dane }} | UES: {{ notif.institucion_ues }}</div>
@@ -493,6 +514,7 @@ const notifications = ref<any[]>([])
 const unreadCount = ref(0)
 const loadingNotifications = ref(false)
 const errorNotifications = ref(false)
+const showReadNotifications = ref(false)
 // Modal confirmation state
 const showConfirmDeleteAll = ref(false)
 const confirmDeleteAllBtnRef = ref<HTMLButtonElement | null>(null)
@@ -641,7 +663,10 @@ const fetchNotifications = async () => {
   loadingNotifications.value = true
   errorNotifications.value = false
   try {
-    const response = await fetch(`${API_BASE}/api/etl/notifications/list_unread/`)
+    const endpoint = showReadNotifications.value 
+      ? `${API_BASE}/api/etl/notifications/` 
+      : `${API_BASE}/api/etl/notifications/list_unread/`
+    const response = await fetch(endpoint)
     const data = await response.json()
     notifications.value = data
   } catch (error) {
@@ -663,11 +688,28 @@ const markAsRead = async (notif: any) => {
   try {
     await fetch(`${API_BASE}/api/etl/notifications/${notif.id}/mark_read/`, { method: 'POST' })
     notif.is_read = true
-    // Remover de la lista o actualizar contador
-    unreadCount.value = Math.max(0, unreadCount.value - 1)
-    notifications.value = notifications.value.filter(n => n.id !== notif.id)
+    // Remover de la lista o actualizar contador solo si estamos en vista de no leídas
+    if (!showReadNotifications.value) {
+      unreadCount.value = Math.max(0, unreadCount.value - 1)
+      notifications.value = notifications.value.filter(n => n.id !== notif.id)
+    }
   } catch (error) {
     console.error('Error marking as read:', error)
+  }
+}
+
+const markAsUnread = async (notif: any) => {
+  try {
+    // Este endpoint necesita ser creado en el backend si no existe
+    const response = await fetch(`${API_BASE}/api/etl/notifications/${notif.id}/mark_unread/`, { method: 'POST' })
+    if (response.ok) {
+      notif.is_read = false
+      unreadCount.value += 1
+      // Re-fetch para actualizar la lista correctamente
+      await fetchNotifications()
+    }
+  } catch (error) {
+    console.error('Error marking as unread:', error)
   }
 }
 
@@ -1053,6 +1095,10 @@ onBeforeUnmount(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
+.notification-item:hover .notif-buttons {
+  opacity: 1;
+}
+
 .unread-indicator {
   position: absolute;
   left: -2px;
@@ -1062,6 +1108,17 @@ onBeforeUnmount(() => {
   background: #3498db;
   border-radius: 50%;
   border: 2px solid #333;
+}
+
+.notif-buttons {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+  z-index: 10;
 }
 
 .notif-title {
@@ -1125,10 +1182,42 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid #555;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-toggle-read {
+  flex: 1;
+  min-width: 120px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #0ea5a4, #0d9488);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.btn-toggle-read:hover {
+  background: linear-gradient(135deg, #0d9488, #0c8076);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(14, 165, 164, 0.3);
+}
+
+.btn-toggle-read:active {
+  transform: translateY(0);
 }
 
 .btn-delete-all {
-  width: 100%;
+  flex: 1;
+  min-width: 120px;
   padding: 10px;
   background: #7f8c8d;
   color: white;
@@ -1146,9 +1235,6 @@ onBeforeUnmount(() => {
 }
 
 .delete-notif-btn {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
   background-color: #ef4444;
   width: 32px;
   height: 32px;
@@ -1161,12 +1247,7 @@ onBeforeUnmount(() => {
   padding: 0;
   transition: all 150ms ease-out;
   color: white;
-  opacity: 0;
-  z-index: 10;
-}
-
-.notification-item:hover .delete-notif-btn {
-  opacity: 1;
+  flex-shrink: 0;
 }
 
 .delete-notif-btn:hover {
@@ -1180,7 +1261,35 @@ onBeforeUnmount(() => {
 
 .delete-notif-btn:focus-visible {
   outline: 2px solid rgba(255, 255, 255, 0.5);
-  opacity: 1;
+}
+
+.unread-notif-btn {
+  background-color: #0ea5a4;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 150ms ease-out;
+  color: white;
+  flex-shrink: 0;
+}
+
+.unread-notif-btn:hover {
+  background-color: #0d9488;
+  transform: scale(1.1);
+}
+
+.unread-notif-btn:active {
+  transform: scale(0.95);
+}
+
+.unread-notif-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
 }
 
 .notif-content {

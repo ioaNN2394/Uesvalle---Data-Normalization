@@ -34,6 +34,8 @@ class ReportFilter:
         instituciones: Optional[List[str]] = None,
         estados: Optional[List[str]] = None,
         tiene_pae: Optional[bool] = None,
+        fecha_inicio: Optional[str] = None,
+        fecha_fin: Optional[str] = None,
     ):
         self.municipios = municipios or []
         self.conceptos_visita = conceptos_visita or []
@@ -41,6 +43,8 @@ class ReportFilter:
         self.instituciones = instituciones or []
         self.estados = estados or []
         self.tiene_pae = tiene_pae
+        self.fecha_inicio = fecha_inicio
+        self.fecha_fin = fecha_fin
         
     def has_filters(self) -> bool:
         """Verifica si hay al menos un filtro aplicado."""
@@ -50,7 +54,9 @@ class ReportFilter:
             self.anios or 
             self.instituciones or 
             self.estados or 
-            self.tiene_pae is not None
+            self.tiene_pae is not None or
+            self.fecha_inicio or
+            self.fecha_fin
         )
     
     def get_where_clauses(self) -> tuple[List[str], List[Any]]:
@@ -95,6 +101,14 @@ class ReportFilter:
             else:
                 # Buscar valores que indiquen NO (NO, N, no, 0, false, etc.)
                 clauses.append("(LOWER(v.metadata->>'tienepae') IN ('no', 'n') OR v.metadata->>'tienepae' = '0' OR v.metadata->>'tienepae' IS NULL)")
+        
+        if self.fecha_inicio:
+            clauses.append("v.fechavisita >= %s")
+            params.append(self.fecha_inicio)
+        
+        if self.fecha_fin:
+            clauses.append("v.fechavisita <= %s")
+            params.append(self.fecha_fin)
         
         return clauses, params
 
