@@ -248,16 +248,17 @@ const handleLogin = async () => {
   align-items: center;
 }
 
-.input-wrapper svg {
+.input-wrapper > svg:first-child {
   position: absolute;
   left: 14px;
   color: #64748b;
   pointer-events: none;
+  z-index: 1;
 }
 
 .input-wrapper input {
   width: 100%;
-  padding: 14px 14px 14px 44px;
+  padding: 14px 48px 14px 44px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
@@ -285,19 +286,28 @@ const handleLogin = async () => {
 .toggle-password {
   position: absolute;
   right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   background: none;
   border: none;
   color: #64748b;
   cursor: pointer;
-  padding: 4px;
+  padding: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: color 0.2s ease;
+  z-index: 2;
+  border-radius: 4px;
 }
 
 .toggle-password:hover {
-  color: #94a3b8;
+  color: #0ea5a4;
+  background: rgba(14, 165, 164, 0.1);
+}
+
+.toggle-password svg {
+  pointer-events: none;
 }
 
 .error-message {
