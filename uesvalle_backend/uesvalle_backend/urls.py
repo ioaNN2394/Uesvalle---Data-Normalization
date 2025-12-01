@@ -8,6 +8,8 @@ from django.contrib import admin
 from django.urls import path, include
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+from django.conf import settings
+from django.conf.urls.static import static
 
 
 @require_http_methods(["GET"])
@@ -39,3 +41,7 @@ urlpatterns = [
     # Reports Module
     path('api/reports/', include('apps.reports.urls')),
 ]
+
+# Servir archivos media en desarrollo
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

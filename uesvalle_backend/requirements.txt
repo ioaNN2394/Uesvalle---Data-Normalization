@@ -22,7 +22,11 @@ flower==2.0.1         # Dashboard de monitoreo para Celery (opcional pero recome
 # ETL y análisis de datos
 pandas>=2.0.0
 openpyxl>=3.1.0      # Para leer archivos Excel
-xlsxwriter>=3.1.0    # Para escribir archivos Excel
+xlsxwriter>=3.1.0    # Para escribir archivos Excel con streaming
+
+# Reportes y generación de documentos
+reportlab>=4.0.0     # Para generar PDFs de alto rendimiento
+Pillow>=10.0.0       # Para soportar imágenes en reportlab
 
 # SQLAlchemy para operaciones avanzadas de BD
 SQLAlchemy>=2.0.0

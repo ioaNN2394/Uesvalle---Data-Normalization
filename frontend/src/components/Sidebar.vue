@@ -338,26 +338,72 @@
                     <!-- Historial de Visitas -->
                     <div class="detail-section" v-if="institutionDetails.visitas && institutionDetails.visitas.length > 0">
                       <h5>Historial de Visitas ({{ institutionDetails.total_visitas }})</h5>
-                      <div class="visitas-mini-list">
+                      <div class="visitas-accordion-list">
                         <div 
-                          v-for="(visita, idx) in institutionDetails.visitas.slice(0, 3)" 
+                          v-for="(visita, idx) in institutionDetails.visitas" 
                           :key="visita.id" 
-                          class="visita-mini-item"
+                          class="visita-accordion-item"
                           :class="{ 'visita-actual': idx === 0 }"
                         >
-                          <div class="visita-mini-header">
-                            <span class="visita-fecha">{{ formatDateShort(visita.fechavisita) }}</span>
-                            <span class="visita-concepto-mini" :class="getConceptoClassMini(visita.conceptovisita)">
-                              {{ visita.conceptovisita }}
-                            </span>
+                          <!-- Header del acordeón de visita -->
+                          <div 
+                            class="visita-accordion-header"
+                            @click="toggleVisitaDetails(visita.id)"
+                          >
+                            <div class="visita-header-info">
+                              <span class="visita-fecha">{{ formatDateShort(visita.fechavisita) }}</span>
+                              <span class="visita-concepto-mini" :class="getConceptoClassMini(visita.conceptovisita)">
+                                {{ visita.conceptovisita }}
+                              </span>
+                              <span v-if="idx === 0" class="visita-badge-actual">Última</span>
+                            </div>
+                            <svg 
+                              class="visita-chevron" 
+                              :class="{ rotated: expandedVisita === visita.id }" 
+                              width="16" height="16" viewBox="0 0 24 24" 
+                              fill="none" stroke="currentColor" stroke-width="2"
+                            >
+                              <polyline points="6 9 12 15 18 9"/>
+                            </svg>
                           </div>
-                          <p class="visita-funcionario-mini">
-                            {{ visita.nombrefuncionario }} {{ visita.apellidofuncionario }}
-                          </p>
+                          
+                          <!-- Contenido expandible del acordeón de visita -->
+                          <transition name="accordion-visita">
+                            <div v-if="expandedVisita === visita.id" class="visita-accordion-content">
+                              <div class="visita-detail-row">
+                                <span class="visita-label">Funcionario:</span>
+                                <span class="visita-value">{{ visita.nombrefuncionario }} {{ visita.apellidofuncionario }}</span>
+                              </div>
+                              <div v-if="visita.codigofuncionario" class="visita-detail-row">
+                                <span class="visita-label">Código:</span>
+                                <span class="visita-value">{{ visita.codigofuncionario }}</span>
+                              </div>
+                              <div v-if="visita.motivovisita" class="visita-detail-row">
+                                <span class="visita-label">Motivo:</span>
+                                <span class="visita-value">{{ visita.motivovisita }}</span>
+                              </div>
+                              <div v-if="visita.requerimientos" class="visita-detail-row">
+                                <span class="visita-label">Requerimientos:</span>
+                                <span class="visita-value visita-text-block">{{ visita.requerimientos }}</span>
+                              </div>
+                              <div v-if="visita.observacion" class="visita-detail-row">
+                                <span class="visita-label">Observación:</span>
+                                <span class="visita-value visita-text-block">{{ visita.observacion }}</span>
+                              </div>
+                              <!-- Metadata adicional si existe -->
+                              <div v-if="visita.metadata" class="visita-metadata">
+                                <div v-if="visita.metadata.nombremunicipio" class="visita-detail-row">
+                                  <span class="visita-label">Municipio:</span>
+                                  <span class="visita-value">{{ visita.metadata.nombremunicipio }}</span>
+                                </div>
+                                <div v-if="visita.metadata.direccionestablecimiento" class="visita-detail-row">
+                                  <span class="visita-label">Dirección:</span>
+                                  <span class="visita-value">{{ visita.metadata.direccionestablecimiento }}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </transition>
                         </div>
-                        <p v-if="institutionDetails.visitas.length > 3" class="more-visitas">
-                          +{{ institutionDetails.visitas.length - 3 }} visitas más
-                        </p>
                       </div>
                     </div>
                     
@@ -433,6 +479,7 @@ const institutionSearch = ref('')
 const expandedInstitution = ref<string | null>(null)
 const institutionDetails = ref<any>(null)
 const loadingInstitutionDetails = ref(false)
+const expandedVisita = ref<string | null>(null)
 let searchTimeout: any = null
 
 const debouncedSearch = () => {
@@ -707,6 +754,7 @@ const closeInstitutionsModal = () => {
   showInstitutionsModal.value = false
   expandedInstitution.value = null
   institutionDetails.value = null
+  expandedVisita.value = null
 }
 
 // Toggle detalles de institución (acordeón)
@@ -714,6 +762,7 @@ const toggleInstitutionDetails = async (inst: any) => {
   if (expandedInstitution.value === inst.id || expandedInstitution.value === inst.institucion_id) {
     expandedInstitution.value = null
     institutionDetails.value = null
+    expandedVisita.value = null
     return
   }
   
@@ -721,6 +770,7 @@ const toggleInstitutionDetails = async (inst: any) => {
   expandedInstitution.value = instId
   loadingInstitutionDetails.value = true
   institutionDetails.value = null
+  expandedVisita.value = null
   
   try {
     const response = await fetch(`${API_BASE}/api/etl/map/institucion/${instId}/`)
@@ -733,6 +783,15 @@ const toggleInstitutionDetails = async (inst: any) => {
     console.error('Error fetching institution details:', error)
   } finally {
     loadingInstitutionDetails.value = false
+  }
+}
+
+// Toggle detalles de visita (acordeón interno)
+const toggleVisitaDetails = (visitaId: string) => {
+  if (expandedVisita.value === visitaId) {
+    expandedVisita.value = null
+  } else {
+    expandedVisita.value = visitaId
   }
 }
 
@@ -2068,6 +2127,201 @@ onBeforeUnmount(() => {
 .btn-view-on-map svg {
   width: 16px;
   height: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACORDEÓN DE VISITAS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.visitas-accordion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.visitas-accordion-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.visitas-accordion-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.visitas-accordion-list::-webkit-scrollbar-thumb {
+  background: rgba(14, 165, 164, 0.3);
+  border-radius: 2px;
+}
+
+.visita-accordion-item {
+  background: rgba(14, 165, 164, 0.05);
+  border: 1px solid rgba(14, 165, 164, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.visita-accordion-item:hover {
+  border-color: rgba(14, 165, 164, 0.3);
+}
+
+.visita-accordion-item.visita-actual {
+  border-color: rgba(14, 165, 164, 0.4);
+  background: rgba(14, 165, 164, 0.1);
+}
+
+.visita-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.visita-accordion-header:hover {
+  background: rgba(14, 165, 164, 0.08);
+}
+
+.visita-header-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.visita-fecha {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.visita-concepto-mini {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.visita-concepto-mini.favorable {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.visita-concepto-mini.desfavorable {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.visita-concepto-mini.favorable-req {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eab308;
+}
+
+.visita-badge-actual {
+  background: linear-gradient(135deg, #0ea5a4, #0d9488);
+  color: white;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.visita-chevron {
+  color: #64748b;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.visita-chevron.rotated {
+  transform: rotate(180deg);
+  color: #0ea5a4;
+}
+
+.visita-accordion-content {
+  padding: 12px 14px;
+  border-top: 1px solid rgba(14, 165, 164, 0.15);
+  background: rgba(0, 0, 0, 0.15);
+  animation: slideDownVisita 0.2s ease;
+}
+
+@keyframes slideDownVisita {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.visita-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.visita-detail-row:last-child {
+  margin-bottom: 0;
+}
+
+.visita-label {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.visita-value {
+  font-size: 13px;
+  color: #e2e8f0;
+  line-height: 1.4;
+}
+
+.visita-text-block {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid rgba(14, 165, 164, 0.4);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.visita-metadata {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(14, 165, 164, 0.2);
+}
+
+/* Transición para el acordeón de visitas */
+.accordion-visita-enter-active,
+.accordion-visita-leave-active {
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.accordion-visita-enter-from,
+.accordion-visita-leave-to {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.accordion-visita-enter-to,
+.accordion-visita-leave-from {
+  opacity: 1;
+  max-height: 500px;
 }
 
 /* Responsive para el modal */

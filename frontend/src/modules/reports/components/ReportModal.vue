@@ -36,23 +36,51 @@
           </div>
         </div>
         <div class="modal-actions">
-          <button type="button" class="btn-icon">
-            <img src="/xls.png" alt="Exportar a XLS" class="action-icon" />
+          <button type="button" class="btn-icon" @click="generateReport('excel')" :disabled="isGenerating" title="Exportar a Excel">
+            <img :src="xlsIcon" alt="Exportar a XLS" class="action-icon" />
           </button>
-          <button type="button" class="btn-icon">
-            <img src="/pdf.png" alt="Exportar a PDF" class="action-icon" />
+          <button type="button" class="btn-icon" @click="generateReport('pdf')" :disabled="isGenerating" title="Exportar a PDF">
+            <img :src="pdfIcon" alt="Exportar a PDF" class="action-icon" />
           </button>
         </div>
       </form>
+
+      <!-- Status Overlay -->
+      <div v-if="isGenerating || reportStatus" class="status-overlay-inner">
+        <div class="status-content">
+          <h3 v-if="isGenerating">Generando Reporte...</h3>
+          <div v-if="isGenerating" class="progress-bar">
+            <div class="progress-fill" :style="{ width: generationProgress + '%' }"></div>
+          </div>
+          <p v-if="reportStatus === 'success'" class="success-text">
+            ✅ ¡Reporte listo! Descargando...
+          </p>
+          <p v-if="reportStatus === 'error'" class="error-text">
+            ❌ Error: {{ errorMessage }}
+          </p>
+          <button v-if="!isGenerating" @click="closeStatus" class="btn-close-status">Cerrar</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { defineEmits, reactive } from 'vue'
+import { defineEmits, reactive, ref } from 'vue'
+import axios from 'axios'
+import { buildApiUrl } from '@/shared/config/api.config'
+import xlsIcon from '@/assets/icons/xls.png'
+import pdfIcon from '@/assets/icons/pdf.png'
 
 const emit = defineEmits(['close'])
 const close = () => emit('close')
+
+// Estado de generación
+const isGenerating = ref(false)
+const generationProgress = ref(0)
+const reportStatus = ref<'success' | 'error' | null>(null)
+const errorMessage = ref('')
+const currentTaskId = ref('')
 
 type FieldKey =
   | 'anio'
@@ -97,6 +125,110 @@ const form = reactive<Record<FieldKey, string>>({
   nivel: '',
   concepto: ''
 })
+
+// Función principal de generación de reporte
+const generateReport = async (format: 'excel' | 'pdf') => {
+  isGenerating.value = true
+  generationProgress.value = 0
+  reportStatus.value = null
+  errorMessage.value = ''
+
+  // Preparar filtros para el backend
+  const filters = {
+    anios: form.anio ? [parseInt(form.anio)] : [],
+    municipios: form.municipio ? [form.municipio] : [],
+    estados: form.estado ? [form.estado] : [],
+    conceptos_visita: form.concepto ? [form.concepto] : [],
+    calendario: form.calendario || null,
+    nivel: form.nivel || null,
+    tiene_pae: form.pae ? (form.pae.toLowerCase() === 'si' || form.pae.toLowerCase() === 'sí' ? true : form.pae.toLowerCase() === 'no' ? false : null) : null,
+    instituciones: []
+  }
+
+  try {
+    const response = await axios.post(buildApiUrl('/api/reports/generate/'), {
+      format: format,
+      filters: filters
+    })
+
+    if (response.data.task_id) {
+      currentTaskId.value = response.data.task_id
+      checkReportStatus(response.data.task_id)
+    } else if (response.data.warning) {
+      // Si hay advertencia de muchos registros, proceder de todos modos
+      const confirmResponse = await axios.post(buildApiUrl('/api/reports/generate/'), {
+        format: format,
+        filters: filters,
+        confirm: true
+      })
+      if (confirmResponse.data.task_id) {
+        currentTaskId.value = confirmResponse.data.task_id
+        checkReportStatus(confirmResponse.data.task_id)
+      }
+    }
+  } catch (error: any) {
+    console.error('Error generando reporte:', error)
+    isGenerating.value = false
+    reportStatus.value = 'error'
+    
+    // Manejo de errores específicos
+    if (error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED') {
+      errorMessage.value = 'No se puede conectar al servidor. Asegúrate de que el backend está corriendo en http://localhost:8000'
+    } else if (error.response?.status === 404) {
+      errorMessage.value = 'Endpoint no encontrado. Verifica la configuración del backend'
+    } else if (error.response?.status === 500) {
+      errorMessage.value = `Error en el servidor: ${error.response.data?.detail || error.response.data?.error || 'Error desconocido'}`
+    } else if (error.message?.includes('Connection refused')) {
+      errorMessage.value = 'La conexión fue rechazada. ¿El backend está corriendo?'
+    } else {
+      errorMessage.value = error.response?.data?.error || error.message || 'Error al iniciar la generación del reporte'
+    }
+  }
+}
+
+// Verificar estado del reporte (polling)
+const checkReportStatus = async (taskId: string, attempt = 0) => {
+  if (attempt > 300) {
+    reportStatus.value = 'error'
+    errorMessage.value = 'Tiempo de espera agotado'
+    isGenerating.value = false
+    return
+  }
+
+  try {
+    const response = await axios.get(buildApiUrl(`/api/reports/status/${taskId}/`))
+    const data = response.data
+
+    if (data.status === 'processing' || data.status === 'pending') {
+      generationProgress.value = data.progress || Math.min(attempt * 2, 90)
+      setTimeout(() => checkReportStatus(taskId, attempt + 1), 1000)
+    } else if (data.status === 'success') {
+      isGenerating.value = false
+      generationProgress.value = 100
+      reportStatus.value = 'success'
+      
+      // Descargar automáticamente
+      if (data.download_url) {
+        setTimeout(() => {
+          window.location.href = data.download_url
+        }, 500)
+      }
+    } else if (data.status === 'failed' || data.status === 'error') {
+      isGenerating.value = false
+      reportStatus.value = 'error'
+      errorMessage.value = data.error || 'Error desconocido'
+    }
+  } catch (error) {
+    // Reintentar en caso de error de red
+    setTimeout(() => checkReportStatus(taskId, attempt + 1), 2000)
+  }
+}
+
+const closeStatus = () => {
+  reportStatus.value = null
+  isGenerating.value = false
+  errorMessage.value = ''
+}
 </script>
 
 <style scoped>
@@ -243,6 +375,93 @@ const form = reactive<Record<FieldKey, string>>({
   align-items: center;
   justify-content: center;
   color: #6b7280;
+  transition: opacity 0.2s;
+}
+
+.btn-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-icon:hover:not(:disabled) {
+  opacity: 0.8;
+}
+
+/* Status Overlay */
+.status-overlay-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.status-content {
+  text-align: center;
+  padding: 32px;
+}
+
+.status-content h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 16px;
+}
+
+.progress-bar {
+  width: 200px;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0 auto 16px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.success-text {
+  color: #059669;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.error-text {
+  color: #dc2626;
+  font-weight: 500;
+  font-size: 14px;
+  max-width: 300px;
+}
+
+.btn-close-status {
+  margin-top: 16px;
+  padding: 8px 24px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.btn-close-status:hover {
+  background: #4f46e5;
+}
+
+/* Make modal position relative for overlay */
+.report-modal {
+  position: relative;
 }
 
 </style>

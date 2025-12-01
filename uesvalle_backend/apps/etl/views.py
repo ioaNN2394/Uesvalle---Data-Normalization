@@ -463,6 +463,7 @@ class MapMarkersView(APIView):
     Retorna todos los marcadores (sedes) para el mapa.
     GET /api/map/markers/
     Incluye instituciones con y sin coordenadas cuando hay filtros aplicados.
+    IMPORTANTE: Los filtros de concepto se aplican sobre la ÚLTIMA visita de cada institución.
     """
     permission_classes = [AllowAny]
     
@@ -476,8 +477,22 @@ class MapMarkersView(APIView):
             fecha_fin = request.query_params.get('fecha_fin', '')
             include_all = request.query_params.get('include_all', 'false').lower() == 'true'
             
-            # Query con subquery para obtener el concepto de la última visita
+            params = []
+            where_clauses = []
+            
+            has_filters = conceptos or (fecha_inicio and fecha_fin)
+            
+            # Query principal: siempre obtenemos el concepto de la última visita
+            # Usamos una CTE (Common Table Expression) para obtener la última visita de cada institución
             sql = """
+                WITH ultima_visita AS (
+                    SELECT 
+                        v.institucion_id,
+                        v.conceptovisita,
+                        v.fechavisita,
+                        ROW_NUMBER() OVER (PARTITION BY v.institucion_id ORDER BY v.fechavisita DESC) as rn
+                    FROM uesvalle.visita v
+                )
                 SELECT DISTINCT
                     i.id as institucion_id,
                     i.nombre as institucion,
@@ -490,41 +505,29 @@ class MapMarkersView(APIView):
                     i.lat,
                     i.lon,
                     i.codigo_municipio,
-                    (
-                        SELECT v_inner.conceptovisita 
-                        FROM uesvalle.visita v_inner 
-                        WHERE v_inner.institucion_id = i.id 
-                        ORDER BY v_inner.fechavisita DESC 
-                        LIMIT 1
-                    ) as concepto_actual
+                    uv.conceptovisita as concepto_actual,
+                    uv.fechavisita as fecha_ultima_visita
                 FROM uesvalle.institucion i
+                LEFT JOIN ultima_visita uv ON i.id = uv.institucion_id AND uv.rn = 1
             """
-            
-            params = []
-            where_clauses = []
-            
-            has_filters = conceptos or (fecha_inicio and fecha_fin)
             
             # Solo requerir coordenadas si NO hay filtros aplicados y no se pide include_all
             if not has_filters and not include_all:
                 where_clauses.append("i.lat IS NOT NULL")
                 where_clauses.append("i.lon IS NOT NULL")
             
-            if has_filters:
-                sql += " INNER JOIN uesvalle.visita v ON i.id = v.institucion_id "
-                
-                # Filtro Concepto
-                if conceptos:
-                    lista_conceptos = [c.strip() for c in conceptos.split(',') if c.strip()]
-                    if lista_conceptos:
-                        placeholders = ', '.join(['%s'] * len(lista_conceptos))
-                        where_clauses.append(f"v.conceptovisita IN ({placeholders})")
-                        params.extend(lista_conceptos)
-                
-                # Filtro Fecha
-                if fecha_inicio and fecha_fin:
-                    where_clauses.append("v.fechavisita BETWEEN %s AND %s")
-                    params.extend([fecha_inicio, fecha_fin])
+            # Filtro de concepto: se aplica sobre la ÚLTIMA visita únicamente
+            if conceptos:
+                lista_conceptos = [c.strip() for c in conceptos.split(',') if c.strip()]
+                if lista_conceptos:
+                    placeholders = ', '.join(['%s'] * len(lista_conceptos))
+                    where_clauses.append(f"uv.conceptovisita IN ({placeholders})")
+                    params.extend(lista_conceptos)
+            
+            # Filtro de fecha: se aplica sobre la ÚLTIMA visita únicamente
+            if fecha_inicio and fecha_fin:
+                where_clauses.append("uv.fechavisita BETWEEN %s AND %s")
+                params.extend([fecha_inicio, fecha_fin])
             
             # Combinar WHERE
             if where_clauses:
@@ -547,10 +550,13 @@ class MapMarkersView(APIView):
                     # Indicador de si tiene ubicación en el mapa
                     marker['has_location'] = marker['lat'] is not None and marker['lon'] is not None
                     # Agregar campo 'sede' vacío para compatibilidad temporal si es necesario
-                    marker['sede'] = '' 
+                    marker['sede'] = ''
+                    # Formatear fecha de última visita
+                    if marker.get('fecha_ultima_visita'):
+                        marker['fecha_ultima_visita'] = marker['fecha_ultima_visita'].isoformat() if hasattr(marker['fecha_ultima_visita'], 'isoformat') else str(marker['fecha_ultima_visita'])
                     markers.append(marker)
             
-            logger.info(f"Retornando {len(markers)} marcadores para el mapa (Filtros: {conceptos}, {fecha_inicio}-{fecha_fin})")
+            logger.info(f"Retornando {len(markers)} marcadores para el mapa (Filtros: conceptos={conceptos}, fechas={fecha_inicio}-{fecha_fin})")
             
             return Response({
                 'status': 'success',
