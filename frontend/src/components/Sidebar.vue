@@ -390,6 +390,9 @@ import ReportModal from '../modules/reports/components/ReportModal.vue'
 import ETLUploadModal from '../modules/etl/components/ETLUploadModal.vue'
 import { useMapControls } from '../shared/composables/useMapControls'
 
+// Configuración de API
+const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+
 const { triggerZoomIn, triggerZoomOut, triggerResetView, applyFilters, clearFilters, selectInstitution } = useMapControls()
 
 interface Tool {
@@ -521,7 +524,7 @@ const handleETLModalClose = () => {
 // Lógica de Notificaciones
 const checkUpdates = async () => {
   try {
-    const response = await fetch('/api/etl/notifications/check-updates/', { method: 'POST' })
+    const response = await fetch(`${API_BASE}/api/etl/notifications/check-updates/`, { method: 'POST' })
     const data = await response.json()
     if (data.status === 'success') {
       unreadCount.value = data.unread_count
@@ -539,7 +542,7 @@ const fetchNotifications = async () => {
   loadingNotifications.value = true
   errorNotifications.value = false
   try {
-    const response = await fetch('/api/etl/notifications/list_unread/')
+    const response = await fetch(`${API_BASE}/api/etl/notifications/list_unread/`)
     const data = await response.json()
     notifications.value = data
   } catch (error) {
@@ -559,7 +562,7 @@ const toggleNotifications = () => {
 
 const markAsRead = async (notif: any) => {
   try {
-    await fetch(`/api/etl/notifications/${notif.id}/mark_read/`, { method: 'POST' })
+    await fetch(`${API_BASE}/api/etl/notifications/${notif.id}/mark_read/`, { method: 'POST' })
     notif.is_read = true
     // Remover de la lista o actualizar contador
     unreadCount.value = Math.max(0, unreadCount.value - 1)
@@ -571,7 +574,7 @@ const markAsRead = async (notif: any) => {
 
 const deleteNotification = async (notifId: string) => {
   try {
-    await fetch(`/api/etl/notifications/${notifId}/delete_notification/`, { method: 'DELETE' })
+    await fetch(`${API_BASE}/api/etl/notifications/${notifId}/delete_notification/`, { method: 'DELETE' })
     // Remover de la lista y actualizar contador
     notifications.value = notifications.value.filter(n => n.id !== notifId)
     unreadCount.value = Math.max(0, unreadCount.value - 1)
@@ -604,7 +607,7 @@ const closeConfirmDeleteAll = () => {
 
 const performDeleteAll = async () => {
   try {
-    await fetch('/api/etl/notifications/delete-all/', { method: 'DELETE' })
+    await fetch(`${API_BASE}/api/etl/notifications/delete-all/`, { method: 'DELETE' })
     // Limpiar la lista y el contador
     notifications.value = []
     unreadCount.value = 0
@@ -683,7 +686,7 @@ const openInstitutionsModal = async () => {
     }
     
     const queryString = params.toString()
-    const url = `/api/etl/map/markers/${queryString ? '?' + queryString : ''}`
+    const url = `${API_BASE}/api/etl/map/markers/${queryString ? '?' + queryString : ''}`
     
     const response = await fetch(url)
     const data = await response.json()
@@ -720,7 +723,7 @@ const toggleInstitutionDetails = async (inst: any) => {
   institutionDetails.value = null
   
   try {
-    const response = await fetch(`/api/etl/map/institucion/${instId}/`)
+    const response = await fetch(`${API_BASE}/api/etl/map/institucion/${instId}/`)
     const data = await response.json()
     
     if (data.status === 'success') {

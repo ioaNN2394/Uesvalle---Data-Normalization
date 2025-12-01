@@ -139,6 +139,9 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useMapControls } from '../../../shared/composables/useMapControls'
 
+// Configuración de API
+const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+
 const { zoomAction, filterState, selectedInstitutionAction } = useMapControls()
 
 const mapContainer = ref<HTMLDivElement>()
@@ -169,7 +172,7 @@ async function fetchMapMarkers() {
     }
 
     const queryString = params.toString()
-    const url = `/api/etl/map/markers/${queryString ? '?' + queryString : ''}`
+    const url = `${API_BASE}/api/etl/map/markers/${queryString ? '?' + queryString : ''}`
     
     console.log('Fetching markers with URL:', url)
 
@@ -189,7 +192,7 @@ async function fetchMapMarkers() {
 async function fetchInstitutionDetails(institucionId: string) {
   try {
     console.log('Fetching details for:', institucionId)
-    const response = await fetch(`/api/etl/map/institucion/${institucionId}/`)
+    const response = await fetch(`${API_BASE}/api/etl/map/institucion/${institucionId}/`)
     const data = await response.json()
     
     if (data.status === 'success') {
