@@ -8,6 +8,7 @@ Generador de reportes con soporte para Excel y PDF usando streaming.
 import io
 import os
 import json
+import logging
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Generator
 from decimal import Decimal
@@ -21,6 +22,8 @@ from reportlab.lib.units import inch
 
 from django.db import connection
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class ReportFilter:
@@ -103,11 +106,11 @@ class ReportFilter:
                 clauses.append("(LOWER(v.metadata->>'tienepae') IN ('no', 'n') OR v.metadata->>'tienepae' = '0' OR v.metadata->>'tienepae' IS NULL)")
         
         if self.fecha_inicio:
-            clauses.append("v.fechavisita >= %s")
+            clauses.append("v.fechavisita >= %s::date")
             params.append(self.fecha_inicio)
         
         if self.fecha_fin:
-            clauses.append("v.fechavisita <= %s")
+            clauses.append("v.fechavisita <= %s::date")
             params.append(self.fecha_fin)
         
         return clauses, params
@@ -135,7 +138,12 @@ class StreamingReportGenerator:
         Returns:
             tuple: (query, params)
         """
-        base_query = """
+        # Si hay filtros de fecha, usamos INNER JOIN para obtener solo visitas que coincidan
+        # Si no hay filtros de fecha, usamos LEFT JOIN para incluir instituciones sin visitas
+        has_date_filter = filters.fecha_inicio or filters.fecha_fin
+        join_type = "INNER JOIN" if has_date_filter else "LEFT JOIN"
+        
+        base_query = f"""
         SELECT DISTINCT
             i.id,
             i.nombre as institucion_nombre,
@@ -148,7 +156,7 @@ class StreamingReportGenerator:
             v.motivovisita,
             v.metadata
         FROM "uesvalle"."institucion" i
-        LEFT JOIN "uesvalle"."visita" v ON i.id = v.institucion_id
+        {join_type} "uesvalle"."visita" v ON i.id = v.institucion_id
         LEFT JOIN "uesvalle"."dim_municipio" dm ON i.codigo_municipio = dm.codigo_municipio
         """
         
@@ -162,16 +170,25 @@ class StreamingReportGenerator:
         
         query += " ORDER BY i.nombre, v.fechavisita DESC"
         
+        logger.info(f"Query SQL construida con {len(where_clauses)} cláusulas WHERE, join_type={join_type}")
+        logger.info(f"Filtros de fecha: inicio={filters.fecha_inicio}, fin={filters.fecha_fin}")
+        logger.debug(f"Query: {query}")
+        logger.debug(f"Parámetros: {params}")
+        
         return query, params
     
     def _get_total_instituciones(self, filters: ReportFilter) -> int:
         """
         Obtiene el total de instituciones que coinciden con los filtros.
         """
-        query = """
+        # Si hay filtros de fecha, usamos INNER JOIN para contar solo instituciones con visitas en ese rango
+        has_date_filter = filters.fecha_inicio or filters.fecha_fin
+        join_type = "INNER JOIN" if has_date_filter else "LEFT JOIN"
+        
+        query = f"""
         SELECT COUNT(DISTINCT i.id)
         FROM "uesvalle"."institucion" i
-        LEFT JOIN "uesvalle"."visita" v ON i.id = v.institucion_id
+        {join_type} "uesvalle"."visita" v ON i.id = v.institucion_id
         LEFT JOIN "uesvalle"."dim_municipio" dm ON i.codigo_municipio = dm.codigo_municipio
         """
         
@@ -180,6 +197,8 @@ class StreamingReportGenerator:
         if where_clauses:
             where_clause = " AND ".join(where_clauses)
             query += f" WHERE {where_clause}"
+        
+        logger.info(f"Query de conteo con {len(where_clauses)} cláusulas, join_type={join_type}")
         
         with self.connection.cursor() as cursor:
             cursor.execute(query, params)
@@ -606,5 +625,13 @@ class StreamingReportGenerator:
         if filters.tiene_pae is not None:
             pae_text = "Con PAE" if filters.tiene_pae else "Sin PAE"
             filter_parts.append(f"PAE: {pae_text}")
+        
+        # Agregar filtros de fecha
+        if filters.fecha_inicio and filters.fecha_fin:
+            filter_parts.append(f"Fecha: {filters.fecha_inicio} a {filters.fecha_fin}")
+        elif filters.fecha_inicio:
+            filter_parts.append(f"Fecha desde: {filters.fecha_inicio}")
+        elif filters.fecha_fin:
+            filter_parts.append(f"Fecha hasta: {filters.fecha_fin}")
         
         return " | ".join(filter_parts) if filter_parts else ""

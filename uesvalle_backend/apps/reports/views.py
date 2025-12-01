@@ -61,11 +61,12 @@ class InstitucionesSearchView(APIView):
             q: término de búsqueda (nombre, DANE, ID)
         """
         try:
-            search_term = request.query_params.get('q', '').strip().lower()
+            search_term = request.query_params.get('q', '').strip()
             
             with connection.cursor() as cursor:
                 if search_term:
-                    # Búsqueda por nombre, DANE o ID (primeras letras)
+                    # Búsqueda flexible: usar unaccent para ignorar tildes y buscar sin límite
+                    # También normalizar espacios y caracteres especiales
                     query = """
                         SELECT DISTINCT
                             i.id,
@@ -73,16 +74,15 @@ class InstitucionesSearchView(APIView):
                             i.dane_ie_id
                         FROM "uesvalle"."institucion" i
                         WHERE 
-                            LOWER(i.nombre) LIKE %s
-                            OR LOWER(i.dane_ie_id) LIKE %s
-                            OR LOWER(i.id::text) LIKE %s
+                            LOWER(TRANSLATE(i.nombre, 'áéíóúÁÉÍÓÚñÑ', 'aeiouAEIOUnN')) LIKE LOWER(TRANSLATE(%s, 'áéíóúÁÉÍÓÚñÑ', 'aeiouAEIOUnN'))
+                            OR LOWER(i.dane_ie_id) LIKE LOWER(%s)
+                            OR LOWER(i.id::text) LIKE LOWER(%s)
                         ORDER BY i.nombre
-                        LIMIT 20
                     """
                     search_pattern = f"%{search_term}%"
                     cursor.execute(query, [search_pattern, search_pattern, search_pattern])
                 else:
-                    # Sin búsqueda, retornar las primeras 20
+                    # Sin búsqueda, retornar TODAS las instituciones ordenadas alfabéticamente
                     query = """
                         SELECT DISTINCT
                             i.id,
@@ -90,7 +90,6 @@ class InstitucionesSearchView(APIView):
                             i.dane_ie_id
                         FROM "uesvalle"."institucion" i
                         ORDER BY i.nombre
-                        LIMIT 20
                     """
                     cursor.execute(query)
                 

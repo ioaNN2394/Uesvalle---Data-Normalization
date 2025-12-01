@@ -32,6 +32,7 @@ def _generate_report_task(task_self, filters_config: dict, output_format: str):
     try:
         task_id = task_self.request.id
         logger.info(f"Iniciando generación de {output_format} con task_id: {task_id}")
+        logger.info(f"Configuración de filtros recibida: {filters_config}")
         
         # Crear filtro desde configuración
         filters = ReportFilter(
@@ -40,8 +41,12 @@ def _generate_report_task(task_self, filters_config: dict, output_format: str):
             anios=filters_config.get('anios', []),
             instituciones=filters_config.get('instituciones', []),
             estados=filters_config.get('estados', []),
-            tiene_pae=filters_config.get('tiene_pae')
+            tiene_pae=filters_config.get('tiene_pae'),
+            fecha_inicio=filters_config.get('fecha_inicio'),
+            fecha_fin=filters_config.get('fecha_fin')
         )
+        
+        logger.info(f"Filtros procesados - fecha_inicio: {filters.fecha_inicio}, fecha_fin: {filters.fecha_fin}")
         
         # Generar nombre de archivo
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
