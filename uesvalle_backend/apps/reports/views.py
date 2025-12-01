@@ -10,6 +10,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 from celery.result import AsyncResult
 from django.conf import settings
+from django.db import connection
 
 from .report_generator import ReportFilter, StreamingReportGenerator
 from .tasks import generate_excel_report, generate_pdf_report
@@ -47,10 +48,127 @@ class ReportListView(APIView):
         })
 
 
-class GenerateReportView(APIView):
-    """Vista para generar reportes con filtros."""
+class InstitucionesSearchView(APIView):
+    """Vista para buscar instituciones por nombre, DANE o ID."""
     
     permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """
+        Retorna lista de instituciones que coinciden con la búsqueda.
+        
+        Query params:
+            q: término de búsqueda (nombre, DANE, ID)
+        """
+        try:
+            search_term = request.query_params.get('q', '').strip().lower()
+            
+            with connection.cursor() as cursor:
+                if search_term:
+                    # Búsqueda por nombre, DANE o ID (primeras letras)
+                    query = """
+                        SELECT DISTINCT
+                            i.id,
+                            i.nombre,
+                            i.dane_ie_id
+                        FROM "uesvalle"."institucion" i
+                        WHERE 
+                            LOWER(i.nombre) LIKE %s
+                            OR LOWER(i.dane_ie_id) LIKE %s
+                            OR LOWER(i.id::text) LIKE %s
+                        ORDER BY i.nombre
+                        LIMIT 20
+                    """
+                    search_pattern = f"%{search_term}%"
+                    cursor.execute(query, [search_pattern, search_pattern, search_pattern])
+                else:
+                    # Sin búsqueda, retornar las primeras 20
+                    query = """
+                        SELECT DISTINCT
+                            i.id,
+                            i.nombre,
+                            i.dane_ie_id
+                        FROM "uesvalle"."institucion" i
+                        ORDER BY i.nombre
+                        LIMIT 20
+                    """
+                    cursor.execute(query)
+                
+                instituciones = [
+                    {
+                        'id': row[0],
+                        'nombre': row[1],
+                        'dane': row[2] or ''
+                    }
+                    for row in cursor.fetchall()
+                ]
+            
+            return Response({
+                'results': instituciones,
+                'total': len(instituciones)
+            })
+        
+        except Exception as e:
+            logger.error(f"Error buscando instituciones: {str(e)}")
+            return Response({
+                'error': 'Error buscando instituciones',
+                'detail': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class GenerateReportView(APIView):
+    """Vista para generar reportes con filtros y obtener opciones de filtros."""
+    
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """Retorna información sobre los filtros disponibles."""
+        try:
+            from django.db import connection
+            
+            with connection.cursor() as cursor:
+                # Municipios
+                cursor.execute("""
+                    SELECT DISTINCT nombre
+                    FROM "uesvalle"."dim_municipio"
+                    ORDER BY nombre
+                """)
+                municipios = [
+                    {'codigo': row[0], 'nombre': row[0]}
+                    for row in cursor.fetchall()
+                ]
+                
+                # Estados
+                cursor.execute("""
+                    SELECT DISTINCT estado
+                    FROM "uesvalle"."institucion"
+                    WHERE estado IS NOT NULL
+                    ORDER BY estado
+                """)
+                estados = [row[0] for row in cursor.fetchall()]
+            
+            return Response({
+                'filter_options': {
+                    'municipios': municipios,
+                    'conceptos_visita': [
+                        {'value': 'F', 'label': 'Favorable'},
+                        {'value': 'D', 'label': 'Desfavorable'},
+                        {'value': 'FCR', 'label': 'Favorable con Requerimientos'}
+                    ],
+                    'estados': estados,
+                    'tiene_pae': [
+                        {'value': 'SI', 'label': 'Sí'},
+                        {'value': 'NO', 'label': 'No'}
+                    ]
+                }
+            })
+        
+        except Exception as e:
+            logger.error(f"Error obteniendo opciones de filtros: {str(e)}")
+            return Response({
+                'error': 'Error obteniendo opciones de filtros',
+                'detail': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def post(self, request):
         """
@@ -60,10 +178,10 @@ class GenerateReportView(APIView):
         {
             "format": "excel" | "pdf",
             "filters": {
-                "municipios": ["código1", "código2"],
+                "municipios": ["nombre1", "nombre2"],
                 "conceptos_visita": ["F", "D", "FCR"],
                 "anios": [2023, 2024],
-                "instituciones": ["uuid1", "uuid2"],
+                "instituciones": ["nombre1", "nombre2"],
                 "estados": ["ACTIVA", "CIERRE TEMPORAL"],
                 "tiene_pae": true | false | null
             }
@@ -92,6 +210,12 @@ class GenerateReportView(APIView):
             # Obtener total de instituciones que coinciden
             generator = StreamingReportGenerator()
             total_instituciones = generator._get_total_instituciones(filters)
+            
+            # Validar que hay datos con los filtros especificados
+            if filters.has_filters() and total_instituciones == 0:
+                return Response({
+                    'error': 'No se encontraron datos que coincidan con los filtros especificados. Por favor, verifica tus filtros.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             
             # Si no hay filtros y no hay confirmación, solicitar confirmación
             if not filters.has_filters() and not request.data.get('confirm', False):
@@ -151,12 +275,12 @@ class GenerateReportView(APIView):
                 
                 # Años
                 cursor.execute("""
-                    SELECT DISTINCT YEAR(fechavisita) as anio
+                    SELECT DISTINCT EXTRACT(YEAR FROM fechavisita) as anio
                     FROM "uesvalle"."visita"
                     WHERE fechavisita IS NOT NULL
                     ORDER BY anio DESC
                 """)
-                anios = [row[0] for row in cursor.fetchall()]
+                anios = [int(row[0]) for row in cursor.fetchall()]
             
             return Response({
                 'filter_options': {

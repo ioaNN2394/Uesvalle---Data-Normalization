@@ -115,26 +115,48 @@
     </div>
     
     <div class="navbar-icons">
+      <!-- Botón de Login/Logout -->
       <button 
-        ref="etlButtonRef"
-        class="navbar-icon-btn" 
-        title="Actualización ETL" 
-        @click="showETLModal = true"
-        aria-label="Abrir diálogo de carga de archivos para actualizar ETL"
+        class="navbar-icon-btn login-btn" 
+        :class="{ 'authenticated': isAuthenticated }"
+        :title="isAuthenticated ? `Sesión: ${userName} - Click para cerrar sesión` : 'Iniciar sesión como colaborador'"
+        @click="handleAuthClick"
       >
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="17 8 12 3 7 8"></polyline>
-          <line x1="12" y1="3" x2="12" y2="15"></line>
+        <svg v-if="!isAuthenticated" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+          <polyline points="10 17 15 12 10 7"/>
+          <line x1="15" y1="12" x2="3" y2="12"/>
+        </svg>
+        <svg v-else width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
         </svg>
       </button>
-      <button class="navbar-icon-btn notification-btn" title="Notificaciones" @click="toggleNotifications">
-        <img src="/campana.png" alt="Notificaciones" class="navbar-icon" />
-        <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount }}</span>
-      </button>
-      <button class="navbar-icon-btn" title="Reportes" @click="showReportModal = true">
-        <img src="/reporte.png" alt="Reportes" class="navbar-icon" />
-      </button>
+      
+      <!-- Botones que requieren autenticación -->
+      <template v-if="isAuthenticated">
+        <button 
+          ref="etlButtonRef"
+          class="navbar-icon-btn" 
+          title="Actualización ETL" 
+          @click="showETLModal = true"
+          aria-label="Abrir diálogo de carga de archivos para actualizar ETL"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+        </button>
+        <button class="navbar-icon-btn notification-btn" title="Notificaciones" @click="toggleNotifications">
+          <img src="/campana.png" alt="Notificaciones" class="navbar-icon" />
+          <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount }}</span>
+        </button>
+        <button class="navbar-icon-btn" title="Reportes" @click="showReportModal = true">
+          <img src="/reporte.png" alt="Reportes" class="navbar-icon" />
+        </button>
+      </template>
     </div>
 
     <!-- Panel de Notificaciones -->
@@ -220,6 +242,13 @@
       </div>
     </div>
     <ReportModal v-if="showReportModal" @close="showReportModal = false" />
+    
+    <!-- Modal de Login -->
+    <LoginModal 
+      :is-open="showLoginModal" 
+      @close="showLoginModal = false"
+      @login-success="handleLoginSuccess"
+    />
 
     <!-- Modal de Instituciones Filtradas -->
     <Teleport to="body">
@@ -434,12 +463,18 @@
 import { ref, onMounted, nextTick, onBeforeUnmount, computed, reactive } from 'vue'
 import ReportModal from '../modules/reports/components/ReportModal.vue'
 import ETLUploadModal from '../modules/etl/components/ETLUploadModal.vue'
+import LoginModal from './LoginModal.vue'
 import { useMapControls } from '../shared/composables/useMapControls'
+import { useAuth } from '../shared/composables/useAuth'
 
 // Configuración de API
 const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
 const { triggerZoomIn, triggerZoomOut, triggerResetView, applyFilters, clearFilters, selectInstitution } = useMapControls()
+
+// Autenticación
+const { isAuthenticated, userName, logout, initAuth } = useAuth()
+const showLoginModal = ref(false)
 
 interface Tool {
   id: string
@@ -566,6 +601,23 @@ const clearFiltersHandler = () => {
 
 const handleETLModalClose = () => {
   showETLModal.value = false
+}
+
+// Manejo de autenticación
+const handleAuthClick = () => {
+  if (isAuthenticated.value) {
+    // Si está autenticado, cerrar sesión
+    logout()
+  } else {
+    // Si no está autenticado, mostrar modal de login
+    showLoginModal.value = true
+  }
+}
+
+const handleLoginSuccess = () => {
+  // Callback cuando el login es exitoso
+  // Opcional: mostrar mensaje de bienvenida o realizar alguna acción
+  console.log('Login exitoso')
 }
 
 // Lógica de Notificaciones
@@ -868,7 +920,12 @@ function formatDateShort(dateString: string | null): string {
 }
 
 onMounted(() => {
-  checkUpdates()
+  // Inicializar autenticación desde localStorage
+  initAuth()
+  // Solo verificar actualizaciones si está autenticado
+  if (isAuthenticated.value) {
+    checkUpdates()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1576,6 +1633,43 @@ onBeforeUnmount(() => {
   width: 24px;
   height: 24px;
   object-fit: contain;
+}
+
+/* Botón de Login/Logout */
+.login-btn {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.login-btn:not(.authenticated) {
+  color: #94a3b8;
+}
+
+.login-btn:not(.authenticated):hover {
+  color: #0ea5a4;
+  background: rgba(14, 165, 164, 0.1);
+}
+
+.login-btn.authenticated {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.login-btn.authenticated:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.login-btn.authenticated::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  background: #22c55e;
+  border-radius: 50%;
+  border: 2px solid #262626;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

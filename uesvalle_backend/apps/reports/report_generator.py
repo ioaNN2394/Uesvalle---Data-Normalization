@@ -7,6 +7,7 @@ Generador de reportes con soporte para Excel y PDF usando streaming.
 
 import io
 import os
+import json
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Generator
 from decimal import Decimal
@@ -64,7 +65,7 @@ class ReportFilter:
         
         if self.municipios:
             placeholders = ','.join(['%s'] * len(self.municipios))
-            clauses.append(f"i.codigo_municipio IN ({placeholders})")
+            clauses.append(f"v.metadata->>'nombremunicipio' IN ({placeholders})")
             params.extend(self.municipios)
         
         if self.conceptos_visita:
@@ -74,12 +75,12 @@ class ReportFilter:
         
         if self.anios:
             placeholders = ','.join(['%s'] * len(self.anios))
-            clauses.append(f"YEAR(v.fechavisita) IN ({placeholders})")
+            clauses.append(f"EXTRACT(YEAR FROM v.fechavisita) IN ({placeholders})")
             params.extend(self.anios)
         
         if self.instituciones:
             placeholders = ','.join(['%s'] * len(self.instituciones))
-            clauses.append(f"i.id IN ({placeholders})")
+            clauses.append(f"i.nombre IN ({placeholders})")
             params.extend(self.instituciones)
         
         if self.estados:
@@ -89,9 +90,11 @@ class ReportFilter:
         
         if self.tiene_pae is not None:
             if self.tiene_pae:
-                clauses.append("v.metadata->>'tienepae' = 'S'")
+                # Buscar valores que indiquen SI (SI, S, sí, 1, true, SI, etc.)
+                clauses.append("(LOWER(v.metadata->>'tienepae') IN ('si', 's') OR v.metadata->>'tienepae' = '1')")
             else:
-                clauses.append("(v.metadata->>'tienepae' IS NULL OR v.metadata->>'tienepae' != 'S')")
+                # Buscar valores que indiquen NO (NO, N, no, 0, false, etc.)
+                clauses.append("(LOWER(v.metadata->>'tienepae') IN ('no', 'n') OR v.metadata->>'tienepae' = '0' OR v.metadata->>'tienepae' IS NULL)")
         
         return clauses, params
 
@@ -129,7 +132,7 @@ class StreamingReportGenerator:
             v.conceptovisita,
             v.nombreactividad,
             v.motivovisita,
-            v.metadata->>'tienepae' as tiene_pae
+            v.metadata
         FROM "uesvalle"."institucion" i
         LEFT JOIN "uesvalle"."visita" v ON i.id = v.institucion_id
         LEFT JOIN "uesvalle"."dim_municipio" dm ON i.codigo_municipio = dm.codigo_municipio
@@ -172,6 +175,7 @@ class StreamingReportGenerator:
     def stream_data(self, filters: ReportFilter) -> Generator[List[Dict[str, Any]], None, None]:
         """
         Generador que trae datos en chunks desde la BD sin cargar todo en RAM.
+        Procesa el metadata JSON de cada visita.
         
         Args:
             filters: Instancia de ReportFilter
@@ -179,6 +183,7 @@ class StreamingReportGenerator:
         Yields:
             Lista de diccionarios con datos (máximo CHUNK_SIZE registros)
         """
+        import json
         query, params = self._build_query(filters)
         
         with self.connection.cursor() as cursor:
@@ -192,10 +197,24 @@ class StreamingReportGenerator:
                 if not rows:
                     break
                 
-                chunk = [
-                    {columns[i]: value for i, value in enumerate(row)}
-                    for row in rows
-                ]
+                chunk = []
+                for row in rows:
+                    row_dict = {columns[i]: value for i, value in enumerate(row)}
+                    
+                    # Procesar metadata JSON
+                    if row_dict.get('metadata'):
+                        try:
+                            if isinstance(row_dict['metadata'], str):
+                                metadata = json.loads(row_dict['metadata'])
+                            else:
+                                metadata = row_dict['metadata']
+                            
+                            # Fusionar metadata con los datos principales
+                            row_dict.update(metadata)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    
+                    chunk.append(row_dict)
                 
                 yield chunk
     
@@ -245,56 +264,143 @@ class StreamingReportGenerator:
             'num_format': 'yyyy-mm-dd'
         })
         
-        # Encabezados
+        # Encabezados - Incluir campos del metadata
         headers = [
             'ID Institución',
             'Nombre Institución',
             'Municipio',
+            'Código Municipio',
+            'Nombre Municipio (Metadata)',
             'Estado',
+            'Dirección',
+            'Teléfono',
+            'Celular',
             'Fecha Visita',
             'Concepto Visita',
             'Actividad',
             'Motivo',
-            'Tiene PAE'
+            'Tiene PAE',
+            'Estudiantes Hombre',
+            'Estudiantes Mujer',
+            'Total Trabajadores',
+            'Docentes',
+            'Cumplimiento (%)',
+            'Actividad ID',
+            'Código Actividad',
+            'Barrio',
+            'Usuario',
+            'Funcionario',
+            'Representante',
+            'Código DANE',
+            'Código ARO',
+            'Nombre ARO',
+            'Código Corregimiento',
+            'Tipo Contrato',
+            'Piscinas',
+            'Acta Manual',
+            'Fecha Cargue'
         ]
         
         for col, header in enumerate(headers):
             worksheet.write(0, col, header, header_format)
         
         # Configurar ancho de columnas
-        worksheet.set_column('A:A', 36)  # ID Institución
-        worksheet.set_column('B:B', 30)  # Nombre Institución
-        worksheet.set_column('C:C', 20)  # Municipio
-        worksheet.set_column('D:D', 15)  # Estado
-        worksheet.set_column('E:E', 12)  # Fecha
-        worksheet.set_column('F:F', 18)  # Concepto
-        worksheet.set_column('G:G', 30)  # Actividad
-        worksheet.set_column('H:H', 30)  # Motivo
-        worksheet.set_column('I:I', 12)  # PAE
+        worksheet.set_column('A:A', 12)  # ID
+        worksheet.set_column('B:B', 25)  # Nombre Institución
+        worksheet.set_column('C:C', 15)  # Municipio
+        worksheet.set_column('D:D', 15)  # Código Municipio
+        worksheet.set_column('E:E', 20)  # Nombre Municipio (Metadata)
+        worksheet.set_column('F:F', 15)  # Estado
+        worksheet.set_column('G:G', 25)  # Dirección
+        worksheet.set_column('H:H', 12)  # Teléfono
+        worksheet.set_column('I:I', 12)  # Celular
+        worksheet.set_column('J:J', 12)  # Fecha Visita
+        worksheet.set_column('K:K', 15)  # Concepto
+        worksheet.set_column('L:L', 25)  # Actividad
+        worksheet.set_column('M:M', 25)  # Motivo
+        worksheet.set_column('N:N', 12)  # PAE
+        worksheet.set_column('O:O', 12)  # Est. Hombre
+        worksheet.set_column('P:P', 12)  # Est. Mujer
+        worksheet.set_column('Q:Q', 12)  # Total Trab.
+        worksheet.set_column('R:R', 12)  # Docentes
+        worksheet.set_column('S:S', 12)  # Cumplimiento
+        worksheet.set_column('T:T', 12)  # Actividad ID
+        worksheet.set_column('U:U', 15)  # Código Actividad
+        worksheet.set_column('V:V', 15)  # Barrio
+        worksheet.set_column('W:W', 20)  # Usuario
+        worksheet.set_column('X:X', 20)  # Funcionario
+        worksheet.set_column('Y:Y', 20)  # Representante
+        worksheet.set_column('Z:Z', 15)  # Código DANE
+        worksheet.set_column('AA:AA', 12)  # Código ARO
+        worksheet.set_column('AB:AB', 20)  # Nombre ARO
+        worksheet.set_column('AC:AC', 18)  # Código Corregimiento
+        worksheet.set_column('AD:AD', 12)  # Tipo Contrato
+        worksheet.set_column('AE:AE', 10)  # Piscinas
+        worksheet.set_column('AF:AF', 12)  # Acta Manual
+        worksheet.set_column('AG:AG', 12)  # Fecha Cargue
         
         # Escribir datos en chunks
         row = 1
         for chunk in self.stream_data(filters):
             for data in chunk:
-                worksheet.write(row, 0, str(data.get('id', '')), data_format)
-                worksheet.write(row, 1, str(data.get('institucion_nombre', '')), data_format)
-                worksheet.write(row, 2, str(data.get('municipio_nombre', '') or ''), data_format)
-                worksheet.write(row, 3, str(data.get('estado', '')), data_format)
+                col = 0
+                worksheet.write(row, col, str(data.get('id', '')), data_format); col += 1
+                worksheet.write(row, col, str(data.get('institucion_nombre', '')), data_format); col += 1
+                worksheet.write(row, col, str(data.get('municipio_nombre', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('codigomunicipio', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('nombremunicipio', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('estado', '')), data_format); col += 1
+                worksheet.write(row, col, str(data.get('direccionestablecimiento', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('telefonoestablecimiento', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('celular', '') or ''), data_format); col += 1
                 
-                # Fecha
+                # Fecha Visita
                 fecha = data.get('fechavisita')
                 if fecha:
-                    worksheet.write(row, 4, fecha, date_format)
+                    worksheet.write(row, col, fecha, date_format)
                 else:
-                    worksheet.write(row, 4, '', data_format)
+                    worksheet.write(row, col, '', data_format)
+                col += 1
                 
-                worksheet.write(row, 5, str(data.get('conceptovisita', '')), data_format)
-                worksheet.write(row, 6, str(data.get('nombreactividad', '') or ''), data_format)
-                worksheet.write(row, 7, str(data.get('motivovisita', '') or ''), data_format)
+                worksheet.write(row, col, str(data.get('conceptovisita', '')), data_format); col += 1
+                worksheet.write(row, col, str(data.get('nombreactividad', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('motivovisita', '') or ''), data_format); col += 1
                 
-                # PAE
-                tiene_pae = data.get('tiene_pae', '')
-                worksheet.write(row, 8, 'Sí' if tiene_pae == 'S' else ('No' if tiene_pae else ''), data_format)
+                # PAE - Usar metadata tienepae correctamente
+                tiene_pae = data.get('tienepae', '') or data.get('tiene_pae', '')
+                pae_texto = 'Sí' if tiene_pae in ('SI', 'S', True) else 'No'
+                worksheet.write(row, col, pae_texto, data_format); col += 1
+                
+                worksheet.write(row, col, str(data.get('estudianteshombre', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('estudiantesmujer', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('totaltrabajador', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('numerosdocente', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('cumplimiento', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('idactividad', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('codigoactividad', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('nombrebarrio', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('nombreusuario', '') or ''), data_format); col += 1
+                
+                # Funcionario (apellido + nombre)
+                func_apellido = data.get('apellidofuncionario', '')
+                func_nombre = data.get('nombrefuncionario', '')
+                funcionario = f"{func_apellido} {func_nombre}".strip()
+                worksheet.write(row, col, funcionario, data_format); col += 1
+                
+                # Representante (apellido + nombre)
+                rep_apellido = data.get('apellidorepresentante', '')
+                rep_nombre = data.get('nombrerepresentante', '')
+                representante = f"{rep_apellido} {rep_nombre}".strip()
+                worksheet.write(row, col, representante, data_format); col += 1
+                
+                worksheet.write(row, col, str(data.get('codigodane', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('codigoaro', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('nombrearo', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('codigocorregimiento', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('tipocontrato', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('numeropiscinas', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('numeromanualacta', '') or ''), data_format); col += 1
+                worksheet.write(row, col, str(data.get('fecha_cargue', '') or ''), data_format); col += 1
                 
                 row += 1
         
@@ -369,14 +475,22 @@ class StreamingReportGenerator:
         elements.append(filters_text)
         elements.append(Spacer(1, 12))
         
-        # Encabezados de tabla
+        # Encabezados de tabla - Incluir campos del metadata
         headers = [
             'Institución',
             'Municipio',
+            'Municipio (Meta)',
             'Estado',
             'Fecha Visita',
             'Concepto',
-            'Tiene PAE'
+            'Actividad',
+            'Motivo',
+            'Tiene PAE',
+            'Est. Hombre',
+            'Est. Mujer',
+            'Cumplimiento',
+            'Usuario',
+            'Barrio'
         ]
         
         # Traer datos y construir tabla en chunks
@@ -385,13 +499,30 @@ class StreamingReportGenerator:
         
         for chunk in self.stream_data(filters):
             for data in chunk:
+                # Determinar valor de PAE correctamente
+                tiene_pae = data.get('tienepae', '') or data.get('tiene_pae', '')
+                pae_texto = 'Sí' if tiene_pae in ('SI', 'S', True) else 'No'
+                
+                # Funcionario
+                func_apellido = data.get('apellidofuncionario', '')
+                func_nombre = data.get('nombrefuncionario', '')
+                funcionario = f"{func_apellido} {func_nombre}".strip()
+                
                 table_row = [
-                    str(data.get('institucion_nombre', ''))[:40],  # Truncar nombre largo
-                    str(data.get('municipio_nombre', '') or ''),
-                    str(data.get('estado', '')),
-                    str(data.get('fechavisita', '') or ''),
-                    str(data.get('conceptovisita', '')),
-                    'Sí' if data.get('tiene_pae') == 'S' else 'No' if data.get('tiene_pae') else ''
+                    str(data.get('institucion_nombre', ''))[:30],  # Truncar nombre largo
+                    str(data.get('municipio_nombre', '') or '')[:20],
+                    str(data.get('nombremunicipio', '') or '')[:20],
+                    str(data.get('estado', ''))[:15],
+                    str(data.get('fechavisita', '') or '')[:10],
+                    str(data.get('conceptovisita', ''))[:20],
+                    str(data.get('nombreactividad', '') or '')[:25],
+                    str(data.get('motivovisita', '') or '')[:20],
+                    pae_texto,
+                    str(data.get('estudianteshombre', '') or ''),
+                    str(data.get('estudiantesmujer', '') or ''),
+                    str(data.get('cumplimiento', '') or ''),
+                    funcionario[:25],
+                    str(data.get('nombrebarrio', '') or '')[:20]
                 ]
                 table_data.append(table_row)
                 row_count += 1

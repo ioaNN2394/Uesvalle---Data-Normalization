@@ -5,28 +5,30 @@
       <h2 class="modal-title">Generación de Reporte</h2>
       <form class="modal-form" @submit.prevent>
         <div class="fields-grid">
-          <div v-for="field in fields" :key="field.key" class="modal-field">
-            <label class="modal-label">{{ field.label }}</label>
-            
-            <!-- Selector para Año y Calendario -->
-            <div v-if="field.type === 'select'" class="modal-input-group">
-              <select class="modal-select" v-model="form[field.key]">
-                <option value="" selected>Dejar en blanco o seleccionar</option>
-                <option v-for="option in field.options" :key="option" :value="option">
-                  {{ option }}
-                </option>
-              </select>
-            </div>
-
-            <!-- Input de texto para los demás campos -->
-            <div v-else class="modal-input-group">
+          <!-- Municipio con búsqueda dinámica -->
+          <div class="modal-field">
+            <label class="modal-label">Municipio</label>
+            <div class="modal-input-group">
               <input
                 class="modal-input"
-                :placeholder="'Dejar en blanco generara un reporte general'"
-                v-model="form[field.key]"
+                placeholder="Dejar en blanco o buscar"
+                v-model="form.municipio"
+                @input="handleMunicipioSearch"
+                @focus="showMunicipioDropdown = true"
+                @blur="handleMunicipioBlur"
                 type="text"
               />
-              <button type="button" class="modal-search-btn">
+              <div v-if="showMunicipioDropdown && municipioOptions.length > 0" class="search-dropdown">
+                <div
+                  v-for="option in municipioOptions"
+                  :key="option.codigo"
+                  class="dropdown-item"
+                  @click="selectMunicipio(option)"
+                >
+                  {{ option.nombre }}
+                </div>
+              </div>
+              <button type="button" class="modal-search-btn" @click="showMunicipioDropdown = !showMunicipioDropdown">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="11" cy="11" r="8"/>
                   <path d="m21 21-4.35-4.35"/>
@@ -34,12 +36,121 @@
               </button>
             </div>
           </div>
+
+          <!-- Concepto Visita como Combobox -->
+          <div class="modal-field">
+            <label class="modal-label">Concepto Visita</label>
+            <div class="modal-input-group">
+              <select class="modal-select" v-model="form.conceptoVisita">
+                <option value="">Dejar en blanco o seleccionar</option>
+                <option value="F">Favorable</option>
+                <option value="D">Desfavorable</option>
+                <option value="FCR">Favorable con Requerimientos</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Fecha -->
+          <div class="modal-field">
+            <label class="modal-label">Fecha</label>
+            <div class="modal-input-group">
+              <input
+                class="modal-input"
+                placeholder="YYYY-MM-DD o dejar en blanco"
+                v-model="form.fecha"
+                type="date"
+              />
+            </div>
+          </div>
+
+          <!-- Institución con búsqueda dinámica -->
+          <div class="modal-field">
+            <label class="modal-label">Institución</label>
+            <div class="modal-input-group">
+              <input
+                class="modal-input"
+                placeholder="Buscar por DANE, ID o nombre"
+                v-model="form.institucion"
+                @input="handleInstitucionSearch"
+                @focus="showInstitucionDropdown = true"
+                @blur="handleInstitucionBlur"
+                type="text"
+              />
+              <div v-if="showInstitucionDropdown && institucionOptions.length > 0" class="search-dropdown">
+                <div
+                  v-for="option in institucionOptions"
+                  :key="option.id"
+                  class="dropdown-item"
+                  @click="selectInstitucion(option)"
+                >
+                  <div class="dropdown-item-title">{{ option.nombre }}</div>
+                  <div class="dropdown-item-subtitle">DANE: {{ option.dane }} | ID: {{ option.id }}</div>
+                </div>
+              </div>
+              <button type="button" class="modal-search-btn" @click="showInstitucionDropdown = !showInstitucionDropdown">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.35-4.35"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Estado como Combobox -->
+          <div class="modal-field">
+            <label class="modal-label">Estado</label>
+            <div class="modal-input-group">
+              <select class="modal-select" v-model="form.estado">
+                <option value="">Dejar en blanco o seleccionar</option>
+                <option value="ACTIVA">Activa</option>
+                <option value="CIERRE TEMPORAL">Cierre Temporal</option>
+                <option value="CIERRE DEFINITIVO">Cierre Definitivo</option>
+                <option value="NO DEFINIDO">No Definido</option>
+                <option value="DUPLICADO">Duplicado</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Tiene PAE como Combobox -->
+          <div class="modal-field">
+            <label class="modal-label">Tiene PAE</label>
+            <div class="modal-input-group">
+              <select class="modal-select" v-model="form.tienePae">
+                <option value="">Dejar en blanco o seleccionar</option>
+                <option value="SI">Sí</option>
+                <option value="NO">No</option>
+              </select>
+            </div>
+          </div>
         </div>
+
+        <!-- Mensaje de advertencia si no hay datos -->
+        <div v-if="validationWarning" class="warning-message">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3.05h16.94a2 2 0 0 0 1.71-3.05L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          {{ validationWarning }}
+        </div>
+
         <div class="modal-actions">
-          <button type="button" class="btn-icon" @click="generateReport('excel')" :disabled="isGenerating" title="Exportar a Excel">
+          <button 
+            type="button" 
+            class="btn-icon" 
+            @click="generateReport('excel')" 
+            :disabled="isGenerating || !!validationWarning" 
+            title="Exportar a Excel"
+          >
             <img :src="xlsIcon" alt="Exportar a XLS" class="action-icon" />
           </button>
-          <button type="button" class="btn-icon" @click="generateReport('pdf')" :disabled="isGenerating" title="Exportar a PDF">
+          <button 
+            type="button" 
+            class="btn-icon" 
+            @click="generateReport('pdf')" 
+            :disabled="isGenerating || !!validationWarning" 
+            title="Exportar a PDF"
+          >
             <img :src="pdfIcon" alt="Exportar a PDF" class="action-icon" />
           </button>
         </div>
@@ -66,7 +177,7 @@
 </template>
 
 <script setup lang="ts">
-import { defineEmits, reactive, ref } from 'vue'
+import { defineEmits, reactive, ref, computed } from 'vue'
 import axios from 'axios'
 import { buildApiUrl } from '@/shared/config/api.config'
 import xlsIcon from '@/assets/icons/xls.png'
@@ -81,50 +192,126 @@ const generationProgress = ref(0)
 const reportStatus = ref<'success' | 'error' | null>(null)
 const errorMessage = ref('')
 const currentTaskId = ref('')
+const validationWarning = ref('')
 
-type FieldKey =
-  | 'anio'
-  | 'institucion'
-  | 'pae'
-  | 'municipio'
-  | 'estado'
-  | 'calendario'
-  | 'nivel'
-  | 'concepto'
+// Dropdowns
+const showMunicipioDropdown = ref(false)
+const showInstitucionDropdown = ref(false)
 
-interface Field {
-  key: FieldKey
-  label: string
-  type?: 'text' | 'select'
-  options?: (string | number)[]
+// Opciones de búsqueda
+const municipioOptions = ref<Array<{ codigo: string; nombre: string }>>([])
+const institucionOptions = ref<Array<{ id: string; nombre: string; dane: string }>>([])
+
+// Formulario
+const form = reactive({
+  municipio: '',
+  conceptoVisita: '',
+  fecha: '',
+  institucion: '',
+  estado: '',
+  tienePae: ''
+})
+
+// Función para cargar opciones de municipios
+const loadMunicipios = async () => {
+  try {
+    const response = await axios.get(buildApiUrl('/api/reports/generate/'))
+    if (response.data.filter_options?.municipios) {
+      municipioOptions.value = response.data.filter_options.municipios
+    }
+  } catch (error) {
+    console.error('Error cargando municipios:', error)
+  }
 }
 
-// --- Opciones para los selectores ---
-const currentYear = new Date().getFullYear();
-const years = Array.from({ length: 20 }, (_, i) => currentYear - i);
-const calendarOptions = ['A', 'B'];
+// Función para cargar opciones de instituciones
+const loadInstituciones = async () => {
+  try {
+    const response = await axios.get(buildApiUrl('/api/reports/instituciones/'))
+    if (Array.isArray(response.data.results)) {
+      institucionOptions.value = response.data.results.map((inst: any) => ({
+        id: inst.id,
+        nombre: inst.nombre,
+        dane: inst.dane || ''
+      }))
+    }
+  } catch (error) {
+    console.error('Error cargando instituciones:', error)
+  }
+}
 
-const fields: Field[] = [
-  { key: 'anio', label: 'Año', type: 'select', options: years },
-  { key: 'institucion', label: 'Institución', type: 'text' },
-  { key: 'pae', label: 'PAE', type: 'text' },
-  { key: 'municipio', label: 'Municipio', type: 'text' },
-  { key: 'estado', label: 'Estado', type: 'text' },
-  { key: 'calendario', label: 'Calendario', type: 'select', options: calendarOptions },
-  { key: 'nivel', label: 'Nivel', type: 'text' },
-  { key: 'concepto', label: 'Concepto Sanitario', type: 'text' }
-]
+// Manejar búsqueda de municipio
+const handleMunicipioSearch = (event: Event) => {
+  const input = (event.target as HTMLInputElement).value.toLowerCase()
+  
+  if (!input) {
+    loadMunicipios()
+    return
+  }
 
-const form = reactive<Record<FieldKey, string>>({
-  anio: '',
-  institucion: '',
-  pae: '',
-  municipio: '',
-  estado: '',
-  calendario: '',
-  nivel: '',
-  concepto: ''
-})
+  municipioOptions.value = municipioOptions.value.filter(m =>
+    m.nombre.toLowerCase().includes(input) ||
+    m.codigo.toLowerCase().includes(input)
+  )
+}
+
+// Manejar búsqueda de institución
+const handleInstitucionSearch = (event: Event) => {
+  const input = (event.target as HTMLInputElement).value.toLowerCase()
+  
+  if (!input) {
+    loadInstituciones()
+    return
+  }
+
+  institucionOptions.value = institucionOptions.value.filter(inst =>
+    inst.nombre.toLowerCase().includes(input) ||
+    inst.dane.toLowerCase().includes(input) ||
+    inst.id.toLowerCase().includes(input)
+  )
+}
+
+// Seleccionar municipio
+const selectMunicipio = (option: { codigo: string; nombre: string }) => {
+  form.municipio = option.nombre
+  showMunicipioDropdown.value = false
+  validateFilters()
+}
+
+// Seleccionar institución
+const selectInstitucion = (option: { id: string; nombre: string; dane: string }) => {
+  form.institucion = option.nombre
+  showInstitucionDropdown.value = false
+  validateFilters()
+}
+
+// Manejar blur del municipio con delay
+const handleMunicipioBlur = () => {
+  window.setTimeout(() => {
+    showMunicipioDropdown.value = false
+  }, 200)
+}
+
+// Manejar blur de la institución con delay
+const handleInstitucionBlur = () => {
+  window.setTimeout(() => {
+    showInstitucionDropdown.value = false
+  }, 200)
+}
+
+// Validar que los filtros no retornan datos vacíos
+const validateFilters = async () => {
+  // Si no hay filtros, no validar
+  if (!form.municipio && !form.conceptoVisita && !form.fecha && 
+      !form.institucion && !form.estado && !form.tienePae) {
+    validationWarning.value = ''
+    return
+  }
+
+  // Por ahora, mostrar advertencia si se usan filtros que pueden no devolver resultados
+  // En una versión más avanzada, hacer una consulta previa al backend
+  validationWarning.value = ''
+}
 
 // Función principal de generación de reporte
 const generateReport = async (format: 'excel' | 'pdf') => {
@@ -134,15 +321,13 @@ const generateReport = async (format: 'excel' | 'pdf') => {
   errorMessage.value = ''
 
   // Preparar filtros para el backend
-  const filters = {
-    anios: form.anio ? [parseInt(form.anio)] : [],
+  const filters: any = {
     municipios: form.municipio ? [form.municipio] : [],
+    conceptos_visita: form.conceptoVisita ? [form.conceptoVisita] : [],
+    anios: form.fecha ? [new Date(form.fecha).getFullYear()] : [],
+    instituciones: form.institucion ? [form.institucion] : [],
     estados: form.estado ? [form.estado] : [],
-    conceptos_visita: form.concepto ? [form.concepto] : [],
-    calendario: form.calendario || null,
-    nivel: form.nivel || null,
-    tiene_pae: form.pae ? (form.pae.toLowerCase() === 'si' || form.pae.toLowerCase() === 'sí' ? true : form.pae.toLowerCase() === 'no' ? false : null) : null,
-    instituciones: []
+    tiene_pae: form.tienePae === 'SI' ? true : form.tienePae === 'NO' ? false : null
   }
 
   try {
@@ -151,20 +336,16 @@ const generateReport = async (format: 'excel' | 'pdf') => {
       filters: filters
     })
 
+    if (response.data.action_required) {
+      // Mostrar advertencia de muchos registros
+      validationWarning.value = response.data.warning
+      isGenerating.value = false
+      return
+    }
+
     if (response.data.task_id) {
       currentTaskId.value = response.data.task_id
       checkReportStatus(response.data.task_id)
-    } else if (response.data.warning) {
-      // Si hay advertencia de muchos registros, proceder de todos modos
-      const confirmResponse = await axios.post(buildApiUrl('/api/reports/generate/'), {
-        format: format,
-        filters: filters,
-        confirm: true
-      })
-      if (confirmResponse.data.task_id) {
-        currentTaskId.value = confirmResponse.data.task_id
-        checkReportStatus(confirmResponse.data.task_id)
-      }
     }
   } catch (error: any) {
     console.error('Error generando reporte:', error)
@@ -172,16 +353,14 @@ const generateReport = async (format: 'excel' | 'pdf') => {
     reportStatus.value = 'error'
     
     // Manejo de errores específicos
-    if (error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED') {
-      errorMessage.value = 'No se puede conectar al servidor. Asegúrate de que el backend está corriendo en http://localhost:8000'
-    } else if (error.response?.status === 404) {
-      errorMessage.value = 'Endpoint no encontrado. Verifica la configuración del backend'
+    if (error.response?.data?.error?.includes('no data') || error.response?.status === 400) {
+      errorMessage.value = 'No se encontraron datos que coincidan con los filtros seleccionados. Por favor, verifica tus filtros.'
+    } else if (error.code === 'ERR_NETWORK') {
+      errorMessage.value = 'No se puede conectar al servidor'
     } else if (error.response?.status === 500) {
-      errorMessage.value = `Error en el servidor: ${error.response.data?.detail || error.response.data?.error || 'Error desconocido'}`
-    } else if (error.message?.includes('Connection refused')) {
-      errorMessage.value = 'La conexión fue rechazada. ¿El backend está corriendo?'
+      errorMessage.value = `Error en el servidor: ${error.response.data?.detail || 'Error desconocido'}`
     } else {
-      errorMessage.value = error.response?.data?.error || error.message || 'Error al iniciar la generación del reporte'
+      errorMessage.value = error.response?.data?.error || 'Error al iniciar la generación del reporte'
     }
   }
 }
@@ -201,7 +380,7 @@ const checkReportStatus = async (taskId: string, attempt = 0) => {
 
     if (data.status === 'processing' || data.status === 'pending') {
       generationProgress.value = data.progress || Math.min(attempt * 2, 90)
-      setTimeout(() => checkReportStatus(taskId, attempt + 1), 1000)
+      window.setTimeout(() => checkReportStatus(taskId, attempt + 1), 1000)
     } else if (data.status === 'success') {
       isGenerating.value = false
       generationProgress.value = 100
@@ -209,7 +388,7 @@ const checkReportStatus = async (taskId: string, attempt = 0) => {
       
       // Descargar automáticamente
       if (data.download_url) {
-        setTimeout(() => {
+        window.setTimeout(() => {
           window.location.href = data.download_url
         }, 500)
       }
@@ -220,7 +399,7 @@ const checkReportStatus = async (taskId: string, attempt = 0) => {
     }
   } catch (error) {
     // Reintentar en caso de error de red
-    setTimeout(() => checkReportStatus(taskId, attempt + 1), 2000)
+    window.setTimeout(() => checkReportStatus(taskId, attempt + 1), 2000)
   }
 }
 
@@ -229,6 +408,10 @@ const closeStatus = () => {
   isGenerating.value = false
   errorMessage.value = ''
 }
+
+// Cargar datos iniciales
+loadMunicipios()
+loadInstituciones()
 </script>
 
 <style scoped>
@@ -253,6 +436,7 @@ const closeStatus = () => {
   max-width: 720px;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .modal-title {
@@ -282,6 +466,7 @@ const closeStatus = () => {
   display: flex;
   flex-direction: column;
   width: 100%;
+  position: relative;
 }
 
 .modal-label {
@@ -300,6 +485,7 @@ const closeStatus = () => {
   border-radius: 8px;
   border: 1px solid transparent;
   transition: border-color 0.2s, box-shadow 0.2s;
+  position: relative;
 }
 
 .modal-input-group:focus-within {
@@ -322,14 +508,14 @@ const closeStatus = () => {
   font-size: 13px;
 }
 
-/* --- Estilos para el SELECT --- */
+/* Estilos para el SELECT */
 .modal-select {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
   
   width: 100%;
-  padding: 10px 32px 10px 12px; /* Espacio para la flecha */
+  padding: 10px 32px 10px 12px;
   border: none;
   background-color: transparent;
   font-size: 14px;
@@ -343,10 +529,53 @@ const closeStatus = () => {
   background-size: .65em auto;
 }
 
-/* Color del texto cuando no hay nada seleccionado */
 .modal-select:invalid,
 .modal-select option[value=""] {
   color: #9ca3af;
+}
+
+/* Dropdown de búsqueda */
+.search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 10;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.dropdown-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-bottom: 1px solid #f3f4f6;
+  color: #111827;
+}
+
+.dropdown-item:hover {
+  background-color: #f0f1f3;
+}
+
+.dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.dropdown-item-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #111827;
+}
+
+.dropdown-item-subtitle {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
 }
 
 .modal-search-btn {
@@ -358,6 +587,30 @@ const closeStatus = () => {
   align-items: center;
   justify-content: center;
   color: #6b7280;
+  flex-shrink: 0;
+}
+
+.modal-search-btn:hover {
+  color: #374151;
+}
+
+/* Advertencia */
+.warning-message {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background-color: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  color: #92400e;
+  font-size: 14px;
+  font-weight: 500;
+  width: 100%;
+}
+
+.warning-message svg {
+  flex-shrink: 0;
 }
 
 .modal-actions {
@@ -385,6 +638,11 @@ const closeStatus = () => {
 
 .btn-icon:hover:not(:disabled) {
   opacity: 0.8;
+}
+
+.action-icon {
+  width: 48px;
+  height: 48px;
 }
 
 /* Status Overlay */
@@ -458,10 +716,4 @@ const closeStatus = () => {
 .btn-close-status:hover {
   background: #4f46e5;
 }
-
-/* Make modal position relative for overlay */
-.report-modal {
-  position: relative;
-}
-
 </style>

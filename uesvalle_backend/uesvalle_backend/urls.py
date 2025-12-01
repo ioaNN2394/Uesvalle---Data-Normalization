@@ -35,6 +35,9 @@ urlpatterns = [
     # API Root
     path('api/', api_root, name='api-root'),
 
+    # Core Module (auth, health)
+    path('api/core/', include('apps.core.urls')),
+
     # ETL Module
     path('api/etl/', include('apps.etl.urls')),
 

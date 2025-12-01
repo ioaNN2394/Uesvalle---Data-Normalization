@@ -10,11 +10,11 @@ urlpatterns = [
     # Listado de reportes disponibles
     path('', views.ReportListView.as_view(), name='report-list'),
     
-    # Generar reporte con filtros
+    # Generar reporte con filtros (maneja GET para opciones y POST para generar)
     path('generate/', views.GenerateReportView.as_view(), name='generate-report'),
     
-    # Obtener opciones de filtros (para el frontend)
-    path('filter-options/', views.GenerateReportView.as_view(), name='filter-options'),
+    # Búsqueda de instituciones
+    path('instituciones/', views.InstitucionesSearchView.as_view(), name='instituciones-search'),
     
     # Verificar estado de una tarea de reporte
     path('status/<str:task_id>/', views.ReportStatusView.as_view(), name='report-status'),
