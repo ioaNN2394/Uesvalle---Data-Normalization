@@ -1,0 +1,9 @@
+# ===========================================
+# Configuración de Build para Render
+# ===========================================
+
+# Especifica la versión de Python
+PYTHON_VERSION=3.11.6
+
+# Directorio raíz del backend
+# (Render lo detectará automáticamente si configuras Root Directory)
